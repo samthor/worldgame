@@ -10,11 +10,11 @@ export interface MapConfig {
 }
 
 const DEFAULT_CONFIG: Required<MapConfig> = {
-  numCells: 5000,        // 3-4x more cells (smaller tiles)
+  numCells: 5000, // 3-4x more cells (smaller tiles)
   relaxationSteps: 5, // Increased to 5 for higher plains regularization
   seaLevel: 0.15,
-  noiseScale: 0.8,       // Lower frequency = larger continents and oceans
-  mergeThreshold: 0.65   // Edge size threshold (degrees) below which vertices are collapsed
+  noiseScale: 0.8, // Lower frequency = larger continents and oceans
+  mergeThreshold: 1, // Edge size threshold (degrees) below which vertices are collapsed
 };
 
 export function generatePlanetMap(customConfig?: MapConfig): PlanetMap {
@@ -43,8 +43,12 @@ export function generatePlanetMap(customConfig?: MapConfig): PlanetMap {
     const f3 = f1 * 7.5; // 6.0
     const n3 = simplex.noise3D(x * f3, y * f3, z * f3);
 
+    // Octave 4: Ultra-high frequency, very low amplitude (Defines extreme micro-ruggedness, isolated spiky hills & peaks)
+    const f4 = f1 * 18.0; // 14.4
+    const n4 = simplex.noise3D(x * f4, y * f4, z * f4);
+
     // Weighted Fractal Brownian Motion combination
-    const totalNoise = (1.0 * n1 + 0.38 * n2 + 0.12 * n3) / (1.0 + 0.38 + 0.12);
+    const totalNoise = (1.0 * n1 + 0.38 * n2 + 0.12 * n3 + 0.05 * n4) / (1.0 + 0.38 + 0.12 + 0.05);
     return totalNoise;
   }
 
@@ -269,20 +273,8 @@ export function generatePlanetMap(customConfig?: MapConfig): PlanetMap {
   // Generate final baseline Voronoi mesh
   const finalVoronoi = d3.geoVoronoi().polygons(sites);
 
-  // 3. Topology Pass: Classify Land vs Adjacency Coastlines
+  // 3. Topology Pass: Classify Landmasess
   const isLand = sites.map((site) => getNoise(site[0], site[1]) > config.seaLevel);
-  const isCoast = new Array(sites.length).fill(false);
-
-  finalVoronoi.features.forEach((feature: any, index: number) => {
-    if (!isLand[index]) {
-      // If this water cell shares an edge with ANY land cell, it is Coast
-      const neighbors: number[] | undefined =
-        feature.properties.neighbours || feature.properties.neighbors;
-      if (neighbors && neighbors.some((nIndex) => isLand[nIndex])) {
-        isCoast[index] = true;
-      }
-    }
-  });
 
   // 5. Construct Cell objects, calculate area, and classify biomes & difficulty
   const mergedVertices: [number, number][] = [];
@@ -301,7 +293,6 @@ export function generatePlanetMap(customConfig?: MapConfig): PlanetMap {
     const centroid = sites[index];
     const elevation = getNoise(centroid[0], centroid[1]);
     const land = isLand[index];
-    const coast = isCoast[index];
 
     // Deep copy coordinates to preserve original unmerged geometry references
     const originalCoordinates = feature.geometry.coordinates.map((ring: [number, number][]) => {
@@ -318,8 +309,8 @@ export function generatePlanetMap(customConfig?: MapConfig): PlanetMap {
       type: 'Feature',
       geometry: {
         type: 'Polygon',
-        coordinates
-      }
+        coordinates,
+      },
     });
 
     // Traversal difficulty is 1 / area (capped to avoid extreme infinity or division errors)
@@ -328,21 +319,29 @@ export function generatePlanetMap(customConfig?: MapConfig): PlanetMap {
     // Neighbors extracted from properties
     const neighbors: number[] = feature.properties.neighbours || feature.properties.neighbors || [];
 
-    // Classify Biome
+    // Classify Biome inspired from Civilization (Snow, Tundra, Mountain, Hills, Desert, Grassland, Marsh, Plains)
+    // Completely driven by our unified 4-octave elevation noise and latitude!
     let biome = 'Deep Ocean';
+
     if (land) {
       const absLat = Math.abs(centroid[1]);
-      if (absLat > 65) {
-        biome = 'Tundra';
+      if (absLat > 80) {
+        biome = 'Snow'; // Extremely cold polar regions
+      } else if (absLat > 62) {
+        biome = 'Tundra'; // Cold subpolar regions
       } else if (elevation > config.seaLevel + 0.4) {
-        biome = 'Mountain';
-      } else if (absLat < 20 && elevation < config.seaLevel + 0.2) {
-        biome = 'Desert';
+        biome = 'Mountain'; // High altitude peaks (Octave 4 generates spiky unexpected peaks!)
+      } else if (elevation > config.seaLevel + 0.22) {
+        biome = 'Hills'; // Moderate rolling hills (Octave 4 generates isolated hill pockets!)
+      } else if (absLat < 22 && elevation < config.seaLevel + 0.18) {
+        biome = 'Desert'; // Warm arid bands near equator
+      } else if (absLat < 55 && elevation < config.seaLevel + 0.035) {
+        biome = 'Marsh'; // Low-lying, fresh-water wetland bogs situated in geological depressions
+      } else if (absLat < 48 && elevation < config.seaLevel + 0.12) {
+        biome = 'Grassland'; // Lush temperate well-watered zones
       } else {
-        biome = 'Plains';
+        biome = 'Plains'; // Standard temperate flat plains
       }
-    } else if (coast) {
-      biome = 'Shallow Coast';
     }
 
     return {
@@ -351,13 +350,13 @@ export function generatePlanetMap(customConfig?: MapConfig): PlanetMap {
       elevation,
       biome,
       isLand: land,
-      isCoast: coast,
+      isCoast: false, // Default to false, classified dynamically in the vertex-sharing coast pass!
       neighbors,
       coordinates, // Pass the newly constructed, cleanly merged coordinates array!
       originalCoordinates, // Store original coordinates for accurate topological pruning
       area,
       difficulty,
-      riverConnections: [] // Default initialization of centroid-to-centroid river connections
+      riverConnections: [], // Default initialization of centroid-to-centroid river connections
     };
   });
 
@@ -377,7 +376,7 @@ export function generatePlanetMap(customConfig?: MapConfig): PlanetMap {
 
       const sharedOrig: [number, number][] = [];
       for (const pt1 of ringA) {
-        const isShared = ringB.some(pt2 => Math.hypot(pt1[0] - pt2[0], pt1[1] - pt2[1]) < 0.001);
+        const isShared = ringB.some((pt2) => Math.hypot(pt1[0] - pt2[0], pt1[1] - pt2[1]) < 0.001);
         if (isShared) {
           sharedOrig.push(pt1);
         }
@@ -393,7 +392,10 @@ export function generatePlanetMap(customConfig?: MapConfig): PlanetMap {
 
       for (let a = 0; a < sharedOrig.length; a++) {
         for (let b = a + 1; b < sharedOrig.length; b++) {
-          const dist = Math.hypot(sharedOrig[a][0] - sharedOrig[b][0], sharedOrig[a][1] - sharedOrig[b][1]);
+          const dist = Math.hypot(
+            sharedOrig[a][0] - sharedOrig[b][0],
+            sharedOrig[a][1] - sharedOrig[b][1],
+          );
           if (dist > maxDist) {
             maxDist = dist;
             p1_orig = sharedOrig[a];
@@ -412,6 +414,34 @@ export function generatePlanetMap(customConfig?: MapConfig): PlanetMap {
     });
   });
 
+  // 5.6 Vertex-Sharing Coast Pass
+  // To guarantee a complete, unbroken ring of coastal cells around all landmasses,
+  // no land cell is allowed to touch a deep ocean cell (not even at a single vertex point).
+  // We collect all vertex coordinates of land cells, and classify any adjacent water cells sharing a vertex as Coast.
+  const landVertices = new Set<string>();
+  cells.forEach((cell) => {
+    if (cell.isLand) {
+      const ring = cell.coordinates[0] || [];
+      ring.forEach((pt) => {
+        landVertices.add(`${pt[0].toFixed(4)},${pt[1].toFixed(4)}`);
+      });
+    }
+  });
+
+  cells.forEach((cell) => {
+    if (!cell.isLand) {
+      const ring = cell.coordinates[0] || [];
+      const sharesVertexWithLand = ring.some((pt) => {
+        return landVertices.has(`${pt[0].toFixed(4)},${pt[1].toFixed(4)}`);
+      });
+
+      if (sharesVertexWithLand) {
+        cell.isCoast = true;
+        cell.biome = 'Shallow Coast';
+      }
+    }
+  });
+
   // 6. Topological River Generation Pass (flows uphill from coasts, branching organically)
   // Rivers flow directly between the midpoints (centroids) of adjacent cells,
   // completely bypassing edge midpoints and guaranteeing that rivers never touch or cross polygon corners!
@@ -423,7 +453,10 @@ export function generatePlanetMap(customConfig?: MapConfig): PlanetMap {
     // Find uphill land neighbors (isLand = true, not visited, elevation >= current)
     const uphillCandidates = currentCell.neighbors
       .map((nIndex) => cells[nIndex])
-      .filter((n): n is Cell => n !== undefined && n.isLand && !visited.has(n.id) && n.elevation >= currentCell.elevation);
+      .filter(
+        (n): n is Cell =>
+          n !== undefined && n.isLand && !visited.has(n.id) && n.elevation >= currentCell.elevation,
+      );
 
     if (uphillCandidates.length === 0) return;
 

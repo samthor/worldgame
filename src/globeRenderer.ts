@@ -54,27 +54,43 @@ export class GlobeRenderer {
         },
       };
 
-      // Define base HSL values per cell type
-      let baseH = 140; // Plains Green
-      let baseS = 70;
-      let baseL = 58;
+      // Define base HSL values per cell type (inspired from Civilization)
+      let baseH = 80;  // Plains (golden-green)
+      let baseS = 50;
+      let baseL = 56;
 
-      if (cell.biome === 'Tundra') {
+      if (cell.biome === 'Snow') {
         baseH = 210;
-        baseS = 15;
-        baseL = 90;
+        baseS = 5;
+        baseL = 95; // Crisp polar white
+      } else if (cell.biome === 'Tundra') {
+        baseH = 160;
+        baseS = 10;
+        baseL = 82; // Snow-patched subpolar grey-green
       } else if (cell.biome === 'Mountain') {
         baseH = 240;
-        baseS = 5;
-        baseL = 60;
-      } else if (cell.biome === 'Desert') {
-        baseH = 45;
+        baseS = 4;
+        baseL = 60; // Slate gray mountain peaks
+      } else if (cell.biome === 'Hills') {
+        baseH = 110;
         baseS = 40;
-        baseL = 75;
+        baseL = 55; // Earthy rolling hills sage-green
+      } else if (cell.biome === 'Desert') {
+        baseH = 42;
+        baseS = 65;
+        baseL = 74; // Warm arid sand-yellow
+      } else if (cell.biome === 'Grassland') {
+        baseH = 135;
+        baseS = 65;
+        baseL = 48; // Rich, lush, temperate grass-green
+      } else if (cell.biome === 'Marsh') {
+        baseH = 100;
+        baseS = 25;
+        baseL = 32; // Swampy bog moss-green!
       } else if (cell.isCoast) {
-        baseH = 215;
+        baseH = 210;
         baseS = 85;
-        baseL = 40;
+        baseL = 40; // Vibrant shallow coastal water
       }
 
       // Map difficulty (1 / area) continuously to a [0, 1] factor using log-scale.
@@ -100,8 +116,8 @@ export class GlobeRenderer {
         this.ctx.lineWidth = 1.0;
         this.ctx.stroke();
 
-        // Render stylized mountain peak icon for mountains with high difficulty (small area)
-        if (cell.biome === 'Mountain' && cell.difficulty > 260) {
+        // Render stylized mountain peak icon for ALL mountain cells
+        if (cell.biome === 'Mountain') {
           const projectedCentroid = projection(cell.centroid);
           if (projectedCentroid) {
             const [cx, cy] = projectedCentroid;
@@ -131,6 +147,28 @@ export class GlobeRenderer {
             this.ctx.stroke();
           }
         }
+
+        // Render stylized hill crescent icon for ALL hill cells
+        if (cell.biome === 'Hills') {
+          const projectedCentroid = projection(cell.centroid);
+          if (projectedCentroid) {
+            const [cx, cy] = projectedCentroid;
+
+            // Draw primary retro crescent arc
+            this.ctx.beginPath();
+            this.ctx.arc(cx, cy + 2, 4, Math.PI, 0, false);
+            this.ctx.strokeStyle = 'rgba(0, 0, 0, 0.35)';
+            this.ctx.lineWidth = 1.2;
+            this.ctx.stroke();
+
+            // Draw secondary offset crescent arc for a lovely hand-drawn group feel
+            this.ctx.beginPath();
+            this.ctx.arc(cx + 4, cy + 4, 2.5, Math.PI, 0, false);
+            this.ctx.strokeStyle = 'rgba(0, 0, 0, 0.3)';
+            this.ctx.lineWidth = 1.0;
+            this.ctx.stroke();
+          }
+        }
       } else if (cell.isCoast) {
         // Shallow coastal water WITH borders and continuous depth darkness
         this.ctx.fillStyle = hslColor;
@@ -142,13 +180,110 @@ export class GlobeRenderer {
       }
     });
 
+    // Draw implied 3D cliff shadows between steep elevation drops (high to low land)
+    this.ctx.strokeStyle = 'rgba(0, 0, 0, 0.58)'; // Darker, higher contrast shadow
+    this.ctx.lineWidth = 4.0; // Much thicker and more obvious cliff line
+    this.ctx.lineCap = 'round';
+
+    this.planetMap.cells.forEach((cellA) => {
+      if (!cellA.isLand) return;
+
+      cellA.neighbors.forEach((neighborId) => {
+        const cellB = this.planetMap.getCell(neighborId);
+        if (!cellB) return;
+
+        // We only draw the cliff shadow if cellA is land, and is significantly HIGHER than cellB
+        // AND cellB is also a land cell (restricts cliffs strictly to inland plateaus/mountains, keeping coastlines gentle!)
+        // Lowered elevation threshold to 0.08 to make cliffs much more common across the globe.
+        if (cellB.isLand && cellA.elevation - cellB.elevation > 0.08) {
+          // Find the shared vertices directly in the merged, visible cell coordinates
+          const ringA = (cellA.coordinates[0] || []).slice(0, -1);
+          const ringB = (cellB.coordinates[0] || []).slice(0, -1);
+
+          const sharedPts: [number, number][] = [];
+          for (const pt1 of ringA) {
+            const isShared = ringB.some(pt2 => Math.hypot(pt1[0] - pt2[0], pt1[1] - pt2[1]) < 0.001);
+            if (isShared) {
+              sharedPts.push(pt1);
+            }
+          }
+
+          if (sharedPts.length >= 2) {
+            // Find the two furthest apart shared merged vertices (the actual visible edge endpoints)
+            let maxDist = -1;
+            let p1_merged = sharedPts[0];
+            let p2_merged = sharedPts[1];
+
+            for (let a = 0; a < sharedPts.length; a++) {
+              for (let b = a + 1; b < sharedPts.length; b++) {
+                const dist = Math.hypot(sharedPts[a][0] - sharedPts[b][0], sharedPts[a][1] - sharedPts[b][1]);
+                if (dist > maxDist) {
+                  maxDist = dist;
+                  p1_merged = sharedPts[a];
+                  p2_merged = sharedPts[b];
+                }
+              }
+            }
+
+            const p1 = projection(p1_merged);
+            const p2 = projection(p2_merged);
+
+            if (p1 && p2) {
+              const centroidB = projection(cellB.centroid);
+              if (centroidB) {
+                const mx = (p1[0] + p2[0]) / 2;
+                const my = (p1[1] + p2[1]) / 2;
+                
+                let cx = centroidB[0];
+                let cy = centroidB[1];
+
+                // Correct wrap-around of lower cell centroid for accurate offset direction
+                let dx = cx - mx;
+                let dy = cy - my;
+                if (dx > canvasWidth / 2) {
+                  cx -= canvasWidth;
+                  dx = cx - mx;
+                } else if (dx < -canvasWidth / 2) {
+                  cx += canvasWidth;
+                  dx = cx - mx;
+                }
+
+                // Calculate normalized vector pointing from edge center towards lower cell centroid
+                const len = Math.hypot(dx, dy);
+                if (len > 0) {
+                  const ux = dx / len;
+                  const uy = dy / len;
+                  
+                  // Offset by 3.5 pixels strictly into the lower cell (cellB)
+                  const offset = 3.5;
+                  const sx1 = p1[0] + ux * offset;
+                  const sy1 = p1[1] + uy * offset;
+                  const sx2 = p2[0] + ux * offset;
+                  const sy2 = p2[1] + uy * offset;
+
+                  this.drawSeamSafeLine(sx1, sy1, sx2, sy2, canvasWidth);
+                } else {
+                  this.drawSeamSafeLine(p1[0], p1[1], p2[0], p2[1], canvasWidth);
+                }
+              } else {
+                this.drawSeamSafeLine(p1[0], p1[1], p2[0], p2[1], canvasWidth);
+              }
+            }
+          }
+        }
+      });
+    });
+
     // Draw rivers pass (after all cell fills to prevent overlapping cut-offs)
-    this.ctx.strokeStyle = '#00a8ff99'; // Beautiful bright river blue
+    this.ctx.strokeStyle = '#00a8ff'; // Beautiful bright river blue
     this.ctx.lineWidth = 6.5; // Thicker to make rivers highly visible on a 4K canvas
     this.ctx.lineCap = 'round';
     this.ctx.lineJoin = 'round';
 
     this.planetMap.cells.forEach((cell) => {
+      // Don't draw rivers if they are in the deep ocean (allow them on land and shallow coast!)
+      if (!cell.isLand && !cell.isCoast) return;
+
       if (cell.riverConnections?.length) {
         const fromPt = projection(cell.centroid);
         if (!fromPt) return;
@@ -157,8 +292,8 @@ export class GlobeRenderer {
           const neighbor = this.planetMap.getCell(neighborId);
           if (!neighbor) return;
 
-          // Only draw river segment on land cells to keep them out of oceans/coasts
-          if (!neighbor.isLand) return;
+          // Only draw river segment on land or coast cells to keep them out of deep ocean
+          if (!neighbor.isLand && !neighbor.isCoast) return;
 
           const toPt = projection(neighbor.centroid);
           if (!toPt) return;
