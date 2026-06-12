@@ -2,7 +2,7 @@ import { PlanetMap } from './planetMap.js';
 
 export class GlobeRenderer {
   private readonly planetMap: PlanetMap;
-  
+
   private scene!: any; // THREE.Scene
   private camera!: any; // THREE.PerspectiveCamera
   private renderer!: any; // THREE.WebGLRenderer
@@ -17,22 +17,22 @@ export class GlobeRenderer {
     this.initCanvas();
     this.initThree();
   }
-  
+
   private initCanvas(): void {
-    const canvasWidth = 2048;
-    const canvasHeight = 1024;
+    const canvasWidth = 4096; // 4K resolution width
+    const canvasHeight = 2048; // 4K resolution height
     this.canvas = document.createElement('canvas');
     this.canvas.width = canvasWidth;
     this.canvas.height = canvasHeight;
     this.ctx = this.canvas.getContext('2d')!;
-    
+
     this.drawMap();
   }
 
   private drawMap(): void {
     const canvasWidth = this.canvas.width;
     const canvasHeight = this.canvas.height;
-    
+
     const projection = d3
       .geoEquirectangular()
       .translate([canvasWidth / 2, canvasHeight / 2])
@@ -50,8 +50,8 @@ export class GlobeRenderer {
         type: 'Feature',
         geometry: {
           type: 'Polygon',
-          coordinates: cell.coordinates
-        }
+          coordinates: cell.coordinates,
+        },
       };
 
       // Define base HSL values per cell type
@@ -105,7 +105,7 @@ export class GlobeRenderer {
           const projectedCentroid = projection(cell.centroid);
           if (projectedCentroid) {
             const [cx, cy] = projectedCentroid;
-            
+
             // Draw Peak 1 (Main/background peak)
             this.ctx.beginPath();
             this.ctx.moveTo(cx - 2, cy - 8);
@@ -117,7 +117,7 @@ export class GlobeRenderer {
             this.ctx.strokeStyle = '#f4f4f5'; // Light snow cap ridge line
             this.ctx.lineWidth = 1.0;
             this.ctx.stroke();
-            
+
             // Draw Peak 2 (Foreground peak overlapping)
             this.ctx.beginPath();
             this.ctx.moveTo(cx + 4, cy - 2);
@@ -141,16 +141,90 @@ export class GlobeRenderer {
         this.ctx.stroke();
       }
     });
+
+    // Draw rivers pass (after all cell fills to prevent overlapping cut-offs)
+    this.ctx.strokeStyle = '#00a8ff99'; // Beautiful bright river blue
+    this.ctx.lineWidth = 6.5; // Thicker to make rivers highly visible on a 4K canvas
+    this.ctx.lineCap = 'round';
+    this.ctx.lineJoin = 'round';
+
+    this.planetMap.cells.forEach((cell) => {
+      if (cell.riverConnections?.length) {
+        const fromPt = projection(cell.centroid);
+        if (!fromPt) return;
+
+        cell.riverConnections.forEach((neighborId) => {
+          const neighbor = this.planetMap.getCell(neighborId);
+          if (!neighbor) return;
+
+          // Only draw river segment on land cells to keep them out of oceans/coasts
+          if (!neighbor.isLand) return;
+
+          const toPt = projection(neighbor.centroid);
+          if (!toPt) return;
+
+          // Draw a solid, seam-safe line directly from cell midpoint to neighbor midpoint
+          this.drawSeamSafeLine(fromPt[0], fromPt[1], toPt[0], toPt[1], canvasWidth);
+        });
+      }
+    });
+  }
+
+  /**
+   * Safely draws a line segment on an equirectangular canvas, splitting the line
+   * and wrapping it around the boundaries if it crosses the 180° longitude meridian seam.
+   */
+  private drawSeamSafeLine(
+    fx: number,
+    fy: number,
+    tx: number,
+    ty: number,
+    canvasWidth: number,
+  ): void {
+    const dx = tx - fx;
+    if (Math.abs(dx) > canvasWidth / 2) {
+      // Meridian seam crossed! Split and draw off-canvas edges.
+      const midY = (fy + ty) / 2;
+      if (dx > 0) {
+        // fx is near 0, tx is near canvasWidth. Split off both sides.
+        this.ctx.beginPath();
+        this.ctx.moveTo(fx, fy);
+        this.ctx.lineTo(0, midY);
+        this.ctx.stroke();
+
+        this.ctx.beginPath();
+        this.ctx.moveTo(canvasWidth, midY);
+        this.ctx.lineTo(tx, ty);
+        this.ctx.stroke();
+      } else {
+        // fx is near canvasWidth, tx is near 0. Split off both sides.
+        this.ctx.beginPath();
+        this.ctx.moveTo(fx, fy);
+        this.ctx.lineTo(canvasWidth, midY);
+        this.ctx.stroke();
+
+        this.ctx.beginPath();
+        this.ctx.moveTo(0, midY);
+        this.ctx.lineTo(tx, ty);
+        this.ctx.stroke();
+      }
+    } else {
+      // Standard line (within the same hemisphere/seam)
+      this.ctx.beginPath();
+      this.ctx.moveTo(fx, fy);
+      this.ctx.lineTo(tx, ty);
+      this.ctx.stroke();
+    }
   }
 
   private initThree(): void {
     this.scene = new THREE.Scene();
-    
+
     this.camera = new THREE.PerspectiveCamera(
       50,
       window.innerWidth / window.innerHeight,
       0.1,
-      1000
+      1000,
     );
     this.camera.position.z = 2.8;
 
@@ -164,6 +238,14 @@ export class GlobeRenderer {
     this.controls.dampingFactor = 0.05;
 
     this.texture = new THREE.CanvasTexture(this.canvas);
+    this.texture.minFilter = THREE.LinearMipmapLinearFilter;
+    this.texture.magFilter = THREE.LinearFilter;
+
+    // Check maximum anisotropy of WebGL capabilities and apply 8x anisotropic filtering
+    // to keep the texture razor-sharp at extreme angles near the sphere horizon.
+    const maxAnisotropy = this.renderer.capabilities.getMaxAnisotropy();
+    this.texture.anisotropy = Math.min(maxAnisotropy, 8);
+
     const geometry = new THREE.SphereGeometry(1, 64, 64);
     const material = new THREE.MeshBasicMaterial({ map: this.texture });
     this.sphere = new THREE.Mesh(geometry, material);
@@ -180,7 +262,7 @@ export class GlobeRenderer {
     const animate = () => {
       requestAnimationFrame(animate);
       this.controls.update();
-      this.sphere.rotation.y += 0.0005;
+      // this.sphere.rotation.y += 0.0005;
       this.renderer.render(this.scene, this.camera);
     };
     animate();
