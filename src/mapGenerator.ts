@@ -1,3 +1,4 @@
+import { d3, SimplexNoise } from './deps.js';
 import { Cell } from './types.js';
 import { PlanetMap } from './planetMap.js';
 
@@ -98,15 +99,15 @@ export function generatePlanetMap(customConfig?: MapConfig): PlanetMap {
     }
 
     const heightAboveSea = elevation - config.seaLevel;
-    if (heightAboveSea > 0.4) {
-      return 0.05; // Mountains: very low weight means they stay dense and jagged
-    } else {
-      // Plains, Desert, Tundra: transitions from 1.0 (fully relaxed hexagons) to 0.05 (jagged)
-      const t = heightAboveSea / 0.4;
-      const baseW = 1.0 * (1 - t) + 0.05 * t;
-      // Modulate by regional regularity (chaotic regions are relaxed far less)
-      return baseW * (0.08 * (1 - reg) + 1.0 * reg);
-    }
+    // if (heightAboveSea > 0.4) {
+    //   return 0.05; // Mountains: very low weight means they stay dense and jagged
+    // }
+
+    // Plains, Desert, Tundra: transitions from 1.0 (fully relaxed hexagons) to 0.05 (jagged)
+    const t = heightAboveSea / 0.4;
+    const baseW = 1.0 * (1 - t) + 0.05 * t;
+    // Modulate by regional regularity (chaotic regions are relaxed far less)
+    return baseW * (0.08 * (1 - reg) + 1.0 * reg);
   }
 
   // 1. Initial point distribution (Fibonacci Sphere with modulated Jitter & Rejection Sampling)

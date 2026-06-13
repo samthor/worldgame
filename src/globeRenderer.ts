@@ -1,19 +1,22 @@
+import { THREE, d3, OrbitControls } from './deps.js';
 import { PlanetMap } from './planetMap.js';
 
 export class GlobeRenderer {
   private readonly planetMap: PlanetMap;
 
-  private scene!: any; // THREE.Scene
-  private camera!: any; // THREE.PerspectiveCamera
-  private renderer!: any; // THREE.WebGLRenderer
-  private controls!: any; // THREE.OrbitControls
-  private texture!: any; // THREE.CanvasTexture
-  private sphere!: any; // THREE.Mesh
+  private scene!: THREE.Scene;
+  private camera!: THREE.PerspectiveCamera;
+  private renderer!: THREE.WebGLRenderer;
+  private controls!: any;
+  private texture!: THREE.CanvasTexture;
+  private sphere!: THREE.Mesh;
   private canvas!: HTMLCanvasElement;
   private ctx!: CanvasRenderingContext2D;
+  private coordsElement!: HTMLElement;
 
   constructor(planetMap: PlanetMap) {
     this.planetMap = planetMap;
+    this.coordsElement = document.getElementById('coords')!;
     this.initCanvas();
     this.initThree();
   }
@@ -368,7 +371,7 @@ export class GlobeRenderer {
     this.renderer.setPixelRatio(window.devicePixelRatio);
     document.body.appendChild(this.renderer.domElement);
 
-    this.controls = new THREE.OrbitControls(this.camera, this.renderer.domElement);
+    this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.05;
 
@@ -397,9 +400,32 @@ export class GlobeRenderer {
     const animate = () => {
       requestAnimationFrame(animate);
       this.controls.update();
-      // this.sphere.rotation.y += 0.0005;
+      this.updateViewportDisplay();
       this.renderer.render(this.scene, this.camera);
     };
     animate();
+  }
+
+  /**
+   * Updates the HTML label with current camera-centered lat/lng and zoom level.
+   */
+  private updateViewportDisplay(): void {
+    if (!this.coordsElement) return;
+
+    const pos = this.camera.position.clone().normalize();
+
+    // Convert Cartesian direction to Spherical coordinates
+    const lat = 90 - (Math.acos(pos.y) * 180) / Math.PI;
+    let lon = (Math.atan2(pos.z, pos.x) * 180) / Math.PI - 180;
+
+    // Wrap longitude to [-180, 180]
+    if (lon < -180) lon += 360;
+    if (lon > 180) lon -= 360;
+
+    // Zoom calculation: distance of 2.8 is ~1.0x zoom
+    const distance = this.camera.position.length();
+    const zoom = 2.8 / distance;
+
+    this.coordsElement.innerText = `Lat: ${lat.toFixed(2)} | Lng: ${lon.toFixed(2)} | Zoom: ${zoom.toFixed(2)}x`;
   }
 }

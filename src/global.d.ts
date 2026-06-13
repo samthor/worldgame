@@ -1,7 +1,5 @@
-declare global {
-  const THREE: any;
-  const d3: any;
-  const SimplexNoise: any;
-}
-
 export {};
+
+declare global {
+  // Add any global types here if needed
+}
