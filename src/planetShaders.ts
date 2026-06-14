@@ -41,22 +41,42 @@ export const PLANET_FRAGMENT_SHADER = `
   varying vec3 vViewPosition;
   varying vec3 vWorldPosition;
 
+  // Helper to boost saturation
+  vec3 saturation(vec3 rgb, float adjustment) {
+    const vec3 W = vec3(0.2125, 0.7154, 0.0721);
+    vec3 intensity = vec3(dot(rgb, W));
+    return mix(intensity, rgb, adjustment);
+  }
+
   void main() {
-    // Calculate face normal using screen-space derivatives in view space
-    // dFdx/dFdy are built-in in WebGL 2 (ESSL 3)
+    // 1. Faceted Normals
     vec3 fdx = dFdx(vViewPosition);
     vec3 fdy = dFdy(vViewPosition);
     vec3 normal = normalize(cross(fdx, fdy));
-// Simple Lambertian lighting (in view space)
-// Light is roughly overhead and slightly behind the camera
-vec3 lightDir = normalize(vec3(0.3, 0.6, 1.0));
-float diff = max(dot(normal, lightDir), 0.0);
 
-// Increased ambient and diffuse contribution
-vec3 ambient = vColor * 0.55;
-vec3 diffuse = vColor * diff * 0.85;
+    // 2. Cinematic Sun Lighting
+    // Fixed Sun Direction in View Space
+    vec3 lightDir = normalize(vec3(0.5, 0.8, 1.0));
+    float diff = max(dot(normal, lightDir), 0.0);
 
-gl_FragColor = vec4(ambient + diffuse, 1.0);
+    // Apply a power curve for more dramatic 'Sun' falloff
+    float sunIntensity = pow(diff, 1.2);
+
+    // 3. Color & Saturation
+    // Boost base saturation to match 2D mode vibrancy
+    vec3 saturatedColor = saturation(vColor, 1.45);
+
+    // 4. Lighting Composition
+    // Low ambient for deep shadows, but with colorful bounce
+    float ambient = 0.32; // Slightly higher ambient for better fill
+    float diffuse = sunIntensity * 0.85; // Reduced from 1.05
+
+    vec3 finalColor = saturatedColor * (ambient + diffuse);
+
+    // Specular-like 'Sun Kick' on direct surfaces - Tone this down
+    finalColor += saturatedColor * pow(diff, 12.0) * 0.25; // Sharper falloff and lower intensity
+
+    gl_FragColor = vec4(finalColor, 1.0);
 
   }
 `;

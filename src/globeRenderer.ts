@@ -3,7 +3,8 @@ import { PlanetMap } from './planetMap.js';
 import { GlobeGeometryRenderer } from './globeGeometryRenderer.js';
 import { PLANET_VERTEX_SHADER, PLANET_FRAGMENT_SHADER } from './planetShaders.js';
 import { TownRenderer } from './cellRenderer.js';
-import { TILT_CONFIG } from './constants.js';
+import { TILT_CONFIG, ROTATION_CONFIG } from './constants.js';
+import { getBiomeHSL } from './biomes.js';
 
 export class GlobeRenderer {
   private readonly planetMap: PlanetMap;
@@ -123,55 +124,15 @@ export class GlobeRenderer {
         },
       };
 
-      // Define base HSL values per cell type (inspired from Civilization)
-      let baseH = 80; // Plains (golden-green)
-      let baseS = 50;
-      let baseL = 56;
-
-      if (cell.biome === 'Snow') {
-        baseH = 210;
-        baseS = 5;
-        baseL = 95; // Crisp polar white
-      } else if (cell.biome === 'Tundra') {
-        baseH = 160;
-        baseS = 10;
-        baseL = 82; // Snow-patched subpolar grey-green
-      } else if (cell.biome === 'Mountain') {
-        baseH = 240;
-        baseS = 4;
-        baseL = 60; // Slate gray mountain peaks
-      } else if (cell.biome === 'Hills') {
-        baseH = 110;
-        baseS = 40;
-        baseL = 55; // Earthy rolling hills sage-green
-      } else if (cell.biome === 'Desert') {
-        baseH = 42;
-        baseS = 65;
-        baseL = 74; // Warm arid sand-yellow
-      } else if (cell.biome === 'Grassland') {
-        baseH = 135;
-        baseS = 65;
-        baseL = 48; // Rich, lush, temperate grass-green
-      } else if (cell.biome === 'Marsh') {
-        baseH = 100;
-        baseS = 25;
-        baseL = 32; // Swampy bog moss-green!
-      } else if (cell.isCoast) {
-        baseH = 210;
-        baseS = 85;
-        baseL = 40; // Vibrant shallow coastal water
-      }
-
       // Map difficulty (1 / area) continuously to a [0, 1] factor using log-scale.
-      // Typical difficulty ranges from 40 (large plain) to 1000 (small peak).
       const logMin = Math.log(40);
       const logMax = Math.log(1000);
       const logVal = Math.log(Math.max(cell.difficulty, 40));
       const factor = Math.min(Math.max((logVal - logMin) / (logMax - logMin), 0), 1);
 
       // Lightness decreases continuously with difficulty (making hard areas darker)
-      const l = Math.round(baseL * (1.0 - factor * 0.45));
-      const hslColor = `hsl(${baseH}, ${baseS}%, ${l}%)`;
+      const lightnessMod = 1.0 - factor * 0.45;
+      const hslColor = getBiomeHSL(cell.biome, cell.isCoast, lightnessMod);
 
       this.ctx.beginPath();
       path(feature);
@@ -432,7 +393,7 @@ export class GlobeRenderer {
     this.camera = new THREE.PerspectiveCamera(
       50,
       window.innerWidth / window.innerHeight,
-      0.1,
+      0.01,
       1000,
     );
     // Initial position
@@ -444,17 +405,20 @@ export class GlobeRenderer {
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.setPixelRatio(window.devicePixelRatio);
 
-    // Modern Three.js defaults to Linear color space, we need SRGB for vibrancy
+    // Disable tone mapping to get raw, punchy colors like older Three.js versions
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.5; // Increased exposure
-
+    this.renderer.toneMapping = THREE.NoToneMapping;
+    
     document.body.appendChild(this.renderer.domElement);
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.05;
     this.controls.enablePan = false; // Completely disable panning
+    
+    // Zoom limits to prevent entering the planet
+    this.controls.minDistance = 1.25;
+    this.controls.maxDistance = 6.0;
 
     this.controls.mouseButtons = {
       LEFT: THREE.MOUSE.ROTATE,
@@ -484,23 +448,22 @@ export class GlobeRenderer {
     const oceanGeometry = new THREE.SphereGeometry(0.998, 64, 64);
     const oceanMaterial = new THREE.MeshPhongMaterial({
       color: 0x0a1a2f,
-      transparent: true,
-      opacity: 0.9,
+      transparent: false,
       shininess: 30,
     });
     this.oceanSphere = new THREE.Mesh(oceanGeometry, oceanMaterial);
     this.oceanSphere.visible = false;
     this.scene.add(this.oceanSphere);
 
-    // Setup Lighting for Geometry Mode
-    const ambientLight = new THREE.AmbientLight(0xffffff, 1.0);
+    // Setup Lighting for Geometry Mode (Normalized Levels)
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
     this.scene.add(ambientLight);
 
-    const mainLight = new THREE.DirectionalLight(0xffffff, 2.5);
+    const mainLight = new THREE.DirectionalLight(0xffffff, 1.5);
     mainLight.position.set(5, 5, 5);
     this.scene.add(mainLight);
 
-    const fillLight = new THREE.DirectionalLight(0xffffff, 1.2);
+    const fillLight = new THREE.DirectionalLight(0xffffff, 0.5);
     fillLight.position.set(-5, 2, -5);
     this.scene.add(fillLight);
 
@@ -606,6 +569,11 @@ export class GlobeRenderer {
       }
       
       this.controls.update();
+
+      // Dynamic Rotation Speed based on distance (Zoom-Sensitive)
+      const dist = this.camera.position.length();
+      const t = Math.max(0, Math.min(1, (dist - ROTATION_CONFIG.MIN_DISTANCE) / (ROTATION_CONFIG.MAX_DISTANCE - ROTATION_CONFIG.MIN_DISTANCE)));
+      this.controls.rotateSpeed = ROTATION_CONFIG.MIN_SPEED + t * (ROTATION_CONFIG.MAX_SPEED - ROTATION_CONFIG.MIN_SPEED);
 
       // TILT PHYSICS LOOP
       // 1. Apply Velocity

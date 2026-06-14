@@ -2,6 +2,8 @@ import { THREE } from './deps.js';
 import { PlanetMap } from './planetMap.js';
 import { Cell } from './types.js';
 
+import { getBiomeTHREEColor } from './biomes.js';
+
 export class GlobeGeometryRenderer {
   private readonly planetMap: PlanetMap;
   private readonly elevationScale = 0.15; // How much elevation affects radius
@@ -118,19 +120,10 @@ export class GlobeGeometryRenderer {
 
   /**
    * Maps biome to RGB color for vertex coloring.
+   * Centralized in biomes.ts.
    */
   private getBiomeColor(cell: Cell): [number, number, number] {
-    let color = new THREE.Color(0x55aa00); // Default Plains
-
-    if (cell.biome === 'Snow') color.setHex(0xfffffff);
-    else if (cell.biome === 'Tundra') color.setHex(0xbaccbc);
-    else if (cell.biome === 'Mountain') color.setHex(0x888888);
-    else if (cell.biome === 'Hills') color.setHex(0x779955);
-    else if (cell.biome === 'Desert') color.setHex(0xd2b48c);
-    else if (cell.biome === 'Grassland') color.setHex(0x33aa33);
-    else if (cell.biome === 'Marsh') color.setHex(0x2f4f2f);
-    else if (cell.isCoast) color.setHex(0x0088ff);
-
+    const color = getBiomeTHREEColor(cell.biome, cell.isCoast);
     return [color.r, color.g, color.b];
   }
 }
