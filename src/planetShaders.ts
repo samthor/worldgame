@@ -53,6 +53,7 @@ export const PLANET_FRAGMENT_SHADER = `
   uniform vec3 sunDirection; 
   uniform bool isLine;
   uniform float hoveredCellId;
+  uniform float neighbors[12];
 
   vec3 saturation(vec3 rgb, float adjustment) {
     const vec3 W = vec3(0.2125, 0.7154, 0.0721);
@@ -77,14 +78,28 @@ export const PLANET_FRAGMENT_SHADER = `
     vec3 finalColor = saturatedColor * (ambient + diffuse);
     finalColor += saturatedColor * pow(diff, 12.0) * 0.25;
 
-    float idAlpha = fCellId + 1.0;
+    // ID ENCODING FOR GPU PICKING:
+    // We encode the unique Cell ID into the Alpha channel of the render target.
+    // 0.0 = Empty space / Background
+    // 1.0 = Standard opaque objects (e.g. the Sun sphere, Ocean sphere)
+    // >= 1000.0 = Tactical Cells (Cell ID)
+    // Starting IDs at 1000 avoids collision with standard Three.js materials.
+    float idAlpha = fCellId;
 
     if (isLine) {
       pc_fragColor = vec4(saturatedColor * 0.2, idAlpha);
     } else {
-      // Highlight hovered cell surface
+      // 1. Primary Highlight
       if (abs(fCellId - hoveredCellId) < 0.1) {
-        finalColor = mix(finalColor, vec3(1.0), 0.15); // Subtle white tint
+        finalColor = mix(finalColor, vec3(1.0), 0.15); 
+      } else {
+        // 2. Neighbor Highlight (Subtle)
+        for (int i = 0; i < 12; i++) {
+          if (abs(fCellId - neighbors[i]) < 0.1) {
+            finalColor = mix(finalColor, vec3(1.0), 0.05);
+            break;
+          }
+        }
       }
       pc_fragColor = vec4(finalColor, idAlpha);
     }

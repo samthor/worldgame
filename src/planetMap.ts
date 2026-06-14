@@ -2,16 +2,18 @@ import { Cell } from './types.js';
 
 export class PlanetMap {
   public readonly cells: Cell[];
+  private readonly cellMap = new Map<number, Cell>();
 
   constructor(cells: Cell[]) {
     this.cells = cells;
+    cells.forEach(c => this.cellMap.set(c.id, c));
   }
 
   /**
    * Retrieves a cell by its unique ID.
    */
   public getCell(id: number): Cell | undefined {
-    return this.cells[id];
+    return this.cellMap.get(id);
   }
 
   /**

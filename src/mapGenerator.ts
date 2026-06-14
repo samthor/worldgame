@@ -366,13 +366,13 @@ export function generatePlanetMap(customConfig?: MapConfig): PlanetMap {
     }
 
     return {
-      id: index,
+      id: index + 1000,
       centroid,
       elevation,
       biome,
       isLand: land,
       isCoast: false, // Default to false, classified dynamically in the vertex-sharing coast pass!
-      neighbors,
+      neighbors: neighbors.map(idx => idx + 1000),
       coordinates, // Pass the newly constructed, cleanly merged coordinates array!
       originalCoordinates, // Store original coordinates for accurate topological pruning
       area,
@@ -388,7 +388,7 @@ export function generatePlanetMap(customConfig?: MapConfig): PlanetMap {
   // we prune the neighbor connection completely. This prevents false neighbor connections from global vertex merges.
   cells.forEach((cellA) => {
     cellA.neighbors = cellA.neighbors.filter((neighborId) => {
-      const cellB = cells[neighborId];
+      const cellB = cells[neighborId - 1000];
       if (!cellB) return false;
 
       // Find shared vertices in the original, unmerged polygon geometries
@@ -481,7 +481,7 @@ export function generatePlanetMap(customConfig?: MapConfig): PlanetMap {
       if (!current.isCoast) hasSeaCell = true;
 
       current.neighbors.forEach((nId) => {
-        const neighbor = cells[nId];
+        const neighbor = cells[nId - 1000];
         if (neighbor && !neighbor.isLand && !waterVisited.has(neighbor.id)) {
           waterVisited.add(neighbor.id);
           queue.push(neighbor);
@@ -513,7 +513,7 @@ export function generatePlanetMap(customConfig?: MapConfig): PlanetMap {
 
     // Find uphill land neighbors (isLand = true, not visited, elevation >= current)
     const uphillCandidates = currentCell.neighbors
-      .map((nIndex) => cells[nIndex])
+      .map((nIndex) => cells[nIndex - 1000])
       .filter(
         (n): n is Cell =>
           n !== undefined && n.isLand && !visited.has(n.id) && n.elevation >= currentCell.elevation,

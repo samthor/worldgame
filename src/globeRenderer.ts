@@ -31,6 +31,7 @@ export class GlobeRenderer {
   // Selection State
   private mousePos = new THREE.Vector2(-1, -1);
   private hoveredCellId: number | null = null;
+  private hoveredNeighbors = new Float32Array(12).fill(-1.0);
   
   // World-Space Sun position (Equatorial Plane, 1 AU in Earth-Radius units)
   private sunPosition = new THREE.Vector3(23481, 0, 0);
@@ -413,6 +414,7 @@ export class GlobeRenderer {
 
     this.edgePass = new ShaderPass(EDGE_SHADER);
     this.edgePass.uniforms.hoveredCellId.value = -1.0;
+    this.edgePass.uniforms.neighbors.value = this.hoveredNeighbors;
     this.edgePass.uniforms.resolution.value = new THREE.Vector2(
       window.innerWidth * window.devicePixelRatio,
       window.innerHeight * window.devicePixelRatio
@@ -480,6 +482,7 @@ export class GlobeRenderer {
         elevationScale: { value: TERRAIN_CONFIG.ELEVATION_SCALE },
         sunDirection: { value: this.sunPosition.clone().normalize() },
         hoveredCellId: { value: -1.0 },
+        neighbors: { value: this.hoveredNeighbors },
         isLine: { value: false },
       },
       vertexColors: true,
@@ -502,6 +505,7 @@ export class GlobeRenderer {
         elevationScale: { value: TERRAIN_CONFIG.ELEVATION_SCALE },
         sunDirection: { value: this.sunPosition.clone().normalize() },
         hoveredCellId: { value: -1.0 },
+        neighbors: { value: this.hoveredNeighbors },
         isLine: { value: false },
       },
       vertexColors: true,
@@ -596,15 +600,25 @@ export class GlobeRenderer {
     );
 
     // 3. Extract and decode ID
-    // Our encoding: idAlpha = fCellId + 1.0;
     const rawId = pixel[3]; 
-    const cellId = Math.round(rawId - 1.0);
+    const cellId = Math.round(rawId);
 
     // 4. Update state and uniforms
-    if (cellId >= 0 && cellId < this.planetMap.cells.length) {
+    // Only IDs >= 1000 are valid tactical cells
+    if (cellId >= 1000) {
       this.hoveredCellId = cellId;
+      
+      // Update Neighbors
+      const cell = this.planetMap.getCell(cellId);
+      if (cell) {
+        this.hoveredNeighbors.fill(-1.0);
+        cell.neighbors.forEach((nId, i) => {
+          if (i < 12) this.hoveredNeighbors[i] = nId;
+        });
+      }
     } else {
       this.hoveredCellId = null;
+      this.hoveredNeighbors.fill(-1.0);
     }
 
     const idVal = this.hoveredCellId ?? -1.0;
