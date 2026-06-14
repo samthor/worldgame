@@ -1,10 +1,11 @@
-import { THREE, d3, OrbitControls } from './deps.js';
+import { THREE, d3, OrbitControls, EffectComposer, RenderPass, ShaderPass, OutputPass } from './deps.js';
 import { PlanetMap } from './planetMap.js';
 import { GlobeGeometryRenderer } from './globeGeometryRenderer.js';
 import { PLANET_VERTEX_SHADER, PLANET_FRAGMENT_SHADER } from './planetShaders.js';
 import { TownRenderer } from './cellRenderer.js';
-import { TILT_CONFIG, ROTATION_CONFIG } from './constants.js';
+import { TILT_CONFIG, ROTATION_CONFIG, TERRAIN_CONFIG } from './constants.js';
 import { getBiomeHSL } from './biomes.js';
+import { EDGE_SHADER } from './edgeShader.js';
 
 export class GlobeRenderer {
   private readonly planetMap: PlanetMap;
@@ -12,11 +13,12 @@ export class GlobeRenderer {
   private scene!: THREE.Scene;
   private camera!: THREE.PerspectiveCamera;
   private renderer!: THREE.WebGLRenderer;
+  private composer!: EffectComposer;
+  private edgePass!: ShaderPass;
   private controls!: any;
   private texture!: THREE.CanvasTexture;
   private sphere!: THREE.Mesh;
   private landMesh?: THREE.Mesh;
-  private edgeMesh?: THREE.Mesh; // Changed from LineSegments to Mesh
   private townMesh?: THREE.Mesh;
   private oceanSphere?: THREE.Mesh;
   private sunMesh!: THREE.Mesh;
@@ -62,10 +64,6 @@ export class GlobeRenderer {
       if (this.isTiltMode && e.buttons === 1) {
         this.isDraggingTilt = true;
         const dy = e.clientY - lastY;
-        // Inverted: dragging DOWN (+dy) now tilts camera UP (-tiltAngle)
-        // Wait, user said "direction is wrong way around - just invert the delta change".
-        // Currently: +dy (dragging down) results in +tiltAngle (camera leans forward).
-        // If that was wrong, then dragging DOWN should result in -tiltAngle.
         this.tiltVelocity -= dy * TILT_CONFIG.SENSITIVITY; 
       }
       lastY = e.clientY;
@@ -150,60 +148,6 @@ export class GlobeRenderer {
         this.ctx.strokeStyle = 'rgba(0, 0, 0, 0.4)';
         this.ctx.lineWidth = 1.0;
         this.ctx.stroke();
-
-        // Render stylized mountain peak icon for ALL mountain cells
-        if (cell.biome === 'Mountain') {
-          const projectedCentroid = projection(cell.centroid);
-          if (projectedCentroid) {
-            const [cx, cy] = projectedCentroid;
-
-            // Draw Peak 1 (Main/background peak)
-            this.ctx.beginPath();
-            this.ctx.moveTo(cx - 2, cy - 8);
-            this.ctx.lineTo(cx - 10, cy + 8);
-            this.ctx.lineTo(cx + 6, cy + 8);
-            this.ctx.closePath();
-            this.ctx.fillStyle = '#27272a'; // Deep charcoal gray fill
-            this.ctx.fill();
-            this.ctx.strokeStyle = '#f4f4f5'; // Light snow cap ridge line
-            this.ctx.lineWidth = 1.0;
-            this.ctx.stroke();
-
-            // Draw Peak 2 (Foreground peak overlapping)
-            this.ctx.beginPath();
-            this.ctx.moveTo(cx + 4, cy - 2);
-            this.ctx.lineTo(cx - 2, cy + 8);
-            this.ctx.lineTo(cx + 10, cy + 8);
-            this.ctx.closePath();
-            this.ctx.fillStyle = '#18181b'; // Darker charcoal fill
-            this.ctx.fill();
-            this.ctx.strokeStyle = '#e4e4e7'; // Ridge line
-            this.ctx.lineWidth = 1.0;
-            this.ctx.stroke();
-          }
-        }
-
-        // Render stylized hill crescent icon for ALL hill cells
-        if (cell.biome === 'Hills') {
-          const projectedCentroid = projection(cell.centroid);
-          if (projectedCentroid) {
-            const [cx, cy] = projectedCentroid;
-
-            // Draw primary retro crescent arc
-            this.ctx.beginPath();
-            this.ctx.arc(cx, cy + 2, 4, Math.PI, 0, false);
-            this.ctx.strokeStyle = 'rgba(0, 0, 0, 0.35)';
-            this.ctx.lineWidth = 1.2;
-            this.ctx.stroke();
-
-            // Draw secondary offset crescent arc for a lovely hand-drawn group feel
-            this.ctx.beginPath();
-            this.ctx.arc(cx + 4, cy + 4, 2.5, Math.PI, 0, false);
-            this.ctx.strokeStyle = 'rgba(0, 0, 0, 0.3)';
-            this.ctx.lineWidth = 1.0;
-            this.ctx.stroke();
-          }
-        }
       } else if (cell.isCoast) {
         // Shallow coastal water WITH borders and continuous depth darkness
         this.ctx.fillStyle = hslColor;
@@ -227,11 +171,7 @@ export class GlobeRenderer {
         const cellB = this.planetMap.getCell(neighborId);
         if (!cellB) return;
 
-        // We only draw the cliff shadow if cellA is land, and is significantly HIGHER than cellB
-        // AND cellB is also a land cell (restricts cliffs strictly to inland plateaus/mountains, keeping coastlines gentle!)
-        // Lowered elevation threshold to 0.08 to make cliffs much more common across the globe.
         if (cellB.isLand && cellA.elevation - cellB.elevation > 0.08) {
-          // Find the shared vertices directly in the merged, visible cell coordinates
           const ringA = (cellA.coordinates[0] || []).slice(0, -1);
           const ringB = (cellB.coordinates[0] || []).slice(0, -1);
 
@@ -246,7 +186,6 @@ export class GlobeRenderer {
           }
 
           if (sharedPts.length >= 2) {
-            // Find the two furthest apart shared merged vertices (the actual visible edge endpoints)
             let maxDist = -1;
             let p1_merged = sharedPts[0];
             let p2_merged = sharedPts[1];
@@ -277,7 +216,6 @@ export class GlobeRenderer {
                 let cx = centroidB[0];
                 let cy = centroidB[1];
 
-                // Correct wrap-around of lower cell centroid for accurate offset direction
                 let dx = cx - mx;
                 let dy = cy - my;
                 if (dx > canvasWidth / 2) {
@@ -288,13 +226,11 @@ export class GlobeRenderer {
                   dx = cx - mx;
                 }
 
-                // Calculate normalized vector pointing from edge center towards lower cell centroid
                 const len = Math.hypot(dx, dy);
                 if (len > 0) {
                   const ux = dx / len;
                   const uy = dy / len;
 
-                  // Offset by 3.5 pixels strictly into the lower cell (cellB)
                   const offset = 3.5;
                   const sx1 = p1[0] + ux * offset;
                   const sy1 = p1[1] + uy * offset;
@@ -314,14 +250,13 @@ export class GlobeRenderer {
       });
     });
 
-    // Draw rivers pass (after all cell fills to prevent overlapping cut-offs)
-    this.ctx.strokeStyle = '#00a8ff'; // Beautiful bright river blue
-    this.ctx.lineWidth = 6.5; // Thicker to make rivers highly visible on a 4K canvas
+    // Draw rivers pass
+    this.ctx.strokeStyle = '#00a8ff'; 
+    this.ctx.lineWidth = 6.5; 
     this.ctx.lineCap = 'round';
     this.ctx.lineJoin = 'round';
 
     this.planetMap.cells.forEach((cell) => {
-      // Don't draw rivers if they are in the deep ocean (allow them on land and shallow coast!)
       if (!cell.isLand && !cell.isCoast) return;
 
       if (cell.riverConnections?.length) {
@@ -331,24 +266,15 @@ export class GlobeRenderer {
         cell.riverConnections.forEach((neighborId) => {
           const neighbor = this.planetMap.getCell(neighborId);
           if (!neighbor) return;
-
-          // Only draw river segment on land or coast cells to keep them out of deep ocean
           if (!neighbor.isLand && !neighbor.isCoast) return;
-
           const toPt = projection(neighbor.centroid);
           if (!toPt) return;
-
-          // Draw a solid, seam-safe line directly from cell midpoint to neighbor midpoint
           this.drawSeamSafeLine(fromPt[0], fromPt[1], toPt[0], toPt[1], canvasWidth);
         });
       }
     });
   }
 
-  /**
-   * Safely draws a line segment on an equirectangular canvas, splitting the line
-   * and wrapping it around the boundaries if it crosses the 180° longitude meridian seam.
-   */
   private drawSeamSafeLine(
     fx: number,
     fy: number,
@@ -358,33 +284,27 @@ export class GlobeRenderer {
   ): void {
     const dx = tx - fx;
     if (Math.abs(dx) > canvasWidth / 2) {
-      // Meridian seam crossed! Split and draw off-canvas edges.
       const midY = (fy + ty) / 2;
       if (dx > 0) {
-        // fx is near 0, tx is near canvasWidth. Split off both sides.
         this.ctx.beginPath();
         this.ctx.moveTo(fx, fy);
         this.ctx.lineTo(0, midY);
         this.ctx.stroke();
-
         this.ctx.beginPath();
         this.ctx.moveTo(canvasWidth, midY);
         this.ctx.lineTo(tx, ty);
         this.ctx.stroke();
       } else {
-        // fx is near canvasWidth, tx is near 0. Split off both sides.
         this.ctx.beginPath();
         this.ctx.moveTo(fx, fy);
         this.ctx.lineTo(canvasWidth, midY);
         this.ctx.stroke();
-
         this.ctx.beginPath();
         this.ctx.moveTo(0, midY);
         this.ctx.lineTo(tx, ty);
         this.ctx.stroke();
       }
     } else {
-      // Standard line (within the same hemisphere/seam)
       this.ctx.beginPath();
       this.ctx.moveTo(fx, fy);
       this.ctx.lineTo(tx, ty);
@@ -399,9 +319,8 @@ export class GlobeRenderer {
       50,
       window.innerWidth / window.innerHeight,
       0.01,
-      50000, // Extended far plane for astronomical sun distance
+      50000, 
     );
-    // Initial position
     this.camera.position.set(0, 0, 2.8);
     
     this.renderCamera = this.camera.clone();
@@ -410,7 +329,6 @@ export class GlobeRenderer {
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.setPixelRatio(window.devicePixelRatio);
 
-    // Disable tone mapping to get raw, punchy colors like older Three.js versions
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.NoToneMapping;
     
@@ -419,28 +337,23 @@ export class GlobeRenderer {
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.05;
-    this.controls.enablePan = false; // Completely disable panning
+    this.controls.enablePan = false; 
     
-    // Zoom limits to prevent entering the planet
     this.controls.minDistance = 1.25;
     this.controls.maxDistance = 6.0;
 
     this.controls.mouseButtons = {
       LEFT: THREE.MOUSE.ROTATE,
       MIDDLE: THREE.MOUSE.DOLLY,
-      RIGHT: THREE.MOUSE.PAN, // This is still mapped but enablePan=false will block it
+      RIGHT: THREE.MOUSE.PAN, 
     };
 
-    // Limits for better 3D navigation
     this.controls.minPolarAngle = 0;
-    this.controls.maxPolarAngle = Math.PI; // Allow full access to South Pole
+    this.controls.maxPolarAngle = Math.PI;
 
     this.texture = new THREE.CanvasTexture(this.canvas);
     this.texture.minFilter = THREE.LinearMipmapLinearFilter;
     this.texture.magFilter = THREE.LinearFilter;
-
-    // Check maximum anisotropy of WebGL capabilities and apply 8x anisotropic filtering
-    // to keep the texture razor-sharp at extreme angles near the sphere horizon.
     const maxAnisotropy = this.renderer.capabilities.getMaxAnisotropy();
     this.texture.anisotropy = Math.min(maxAnisotropy, 8);
 
@@ -449,7 +362,6 @@ export class GlobeRenderer {
     this.sphere = new THREE.Mesh(geometry, material);
     this.scene.add(this.sphere);
 
-    // Create Ocean Sphere (slightly smaller to avoid Z-fighting with land geometry)
     const oceanGeometry = new THREE.SphereGeometry(0.998, 64, 64);
     const oceanMaterial = new THREE.MeshPhongMaterial({
       color: 0x0a1a2f,
@@ -460,30 +372,54 @@ export class GlobeRenderer {
     this.oceanSphere.visible = false;
     this.scene.add(this.oceanSphere);
 
-    // Create Sun Mesh (visual indicator)
-    // Scale: 109x Earth Radius
     const sunGeometry = new THREE.SphereGeometry(109.0, 32, 32);
     const sunMaterial = new THREE.MeshBasicMaterial({ color: 0xffff00 });
     this.sunMesh = new THREE.Mesh(sunGeometry, sunMaterial);
     this.sunMesh.position.copy(this.sunPosition);
     this.scene.add(this.sunMesh);
 
-    // Setup Lighting for Geometry Mode (High Brightness Levels)
     const ambientLight = new THREE.AmbientLight(0xffffff, 2.5);
     this.scene.add(ambientLight);
 
     const mainLight = new THREE.DirectionalLight(0xffffff, 3.0);
-    mainLight.position.copy(this.sunPosition); // Point from sun towards (0,0,0)
+    mainLight.position.copy(this.sunPosition); 
     this.scene.add(mainLight);
 
     const fillLight = new THREE.DirectionalLight(0xffffff, 1.0);
     fillLight.position.set(-5, 2, -5);
     this.scene.add(fillLight);
 
+    // Setup Post-Processing with High-Precision Render Target
+    // FloatType (32-bit) provides absolute precision for 5000+ unique cell IDs
+    const renderTarget = new THREE.WebGLRenderTarget(
+      window.innerWidth * window.devicePixelRatio,
+      window.innerHeight * window.devicePixelRatio,
+      {
+        type: THREE.FloatType,
+        format: THREE.RGBAFormat,
+        colorSpace: THREE.SRGBColorSpace,
+      }
+    );
+    this.composer = new EffectComposer(this.renderer, renderTarget);
+    this.composer.addPass(new RenderPass(this.scene, this.camera));
+
+    this.edgePass = new ShaderPass(EDGE_SHADER);
+    this.edgePass.uniforms.resolution.value = new THREE.Vector2(
+      window.innerWidth * window.devicePixelRatio,
+      window.innerHeight * window.devicePixelRatio
+    );
+    this.composer.addPass(this.edgePass);
+    this.composer.addPass(new OutputPass());
+
     window.addEventListener('resize', () => {
       this.camera.aspect = window.innerWidth / window.innerHeight;
       this.camera.updateProjectionMatrix();
       this.renderer.setSize(window.innerWidth, window.innerHeight);
+      this.composer.setSize(window.innerWidth, window.innerHeight);
+      this.edgePass.uniforms.resolution.value.set(
+        window.innerWidth * window.devicePixelRatio,
+        window.innerHeight * window.devicePixelRatio
+      );
     });
   }
 
@@ -494,11 +430,9 @@ export class GlobeRenderer {
       }
     });
 
-    // Also add to UI info
     const info = document.getElementById('info');
     if (info) {
-      info.innerHTML +=
-        '<br><br><span style="color: #4ade80">Press [G] to toggle 3D Geometry Mode</span>';
+      info.innerHTML += '<br><br><span style="color: #4ade80">Press [G] to toggle 3D Geometry Mode</span>';
     }
   }
 
@@ -509,98 +443,60 @@ export class GlobeRenderer {
 
   private updateModeVisibility(): void {
     if (this.isGeometryMode) {
-      // Switch to Geometry Mode
       this.sphere.visible = false;
-      if (!this.landMesh) {
-        this.createLandMesh();
-      }
-      if (!this.townMesh) {
-        this.createTownMesh();
-      }
-      if (!this.edgeMesh) {
-        this.createEdgeMesh();
-      }
+      if (!this.landMesh) this.createLandMesh();
+      if (!this.townMesh) this.createTownMesh();
       if (this.landMesh) this.landMesh.visible = true;
       if (this.townMesh) this.townMesh.visible = true;
-      if (this.edgeMesh) this.edgeMesh.visible = true;
       if (this.oceanSphere) this.oceanSphere.visible = true;
       if (this.sunMesh) this.sunMesh.visible = true;
+      this.edgePass.enabled = true;
     } else {
-      // Switch to Texture Mode
       this.sphere.visible = true;
       if (this.landMesh) this.landMesh.visible = false;
       if (this.townMesh) this.townMesh.visible = false;
-      if (this.edgeMesh) this.edgeMesh.visible = false;
       if (this.oceanSphere) this.oceanSphere.visible = false;
       if (this.sunMesh) this.sunMesh.visible = false;
+      this.edgePass.enabled = false;
     }
   }
 
   private createLandMesh(): void {
     const geoRenderer = new GlobeGeometryRenderer(this.planetMap);
     const geometry = geoRenderer.createLandGeometry();
-
     const material = new THREE.ShaderMaterial({
       vertexShader: PLANET_VERTEX_SHADER,
       fragmentShader: PLANET_FRAGMENT_SHADER,
       uniforms: {
-        elevationScale: { value: 0.15 },
+        elevationScale: { value: TERRAIN_CONFIG.ELEVATION_SCALE },
         sunDirection: { value: this.sunPosition.clone().normalize() },
         isLine: { value: false },
       },
       vertexColors: true,
       side: THREE.FrontSide,
-      extensions: { derivatives: true }, // Required for dFdx/dFdy in fragment shader
-      polygonOffset: true,
-      polygonOffsetFactor: -1,
-      polygonOffsetUnits: -1,
+      extensions: { derivatives: true },
+      glslVersion: THREE.GLSL3,
     });
-
     this.landMesh = new THREE.Mesh(geometry, material);
-    this.landMesh.frustumCulled = false; // Important because "flat" positions aren't the real spherical ones
+    this.landMesh.frustumCulled = false;
     this.scene.add(this.landMesh);
-  }
-
-  private createEdgeMesh(): void {
-    const geoRenderer = new GlobeGeometryRenderer(this.planetMap);
-    const geometry = geoRenderer.createEdgeGeometry();
-
-    const material = new THREE.ShaderMaterial({
-      vertexShader: PLANET_VERTEX_SHADER,
-      fragmentShader: PLANET_FRAGMENT_SHADER,
-      uniforms: {
-        elevationScale: { value: 0.15 },
-        sunDirection: { value: this.sunPosition.clone().normalize() },
-        isLine: { value: true },
-      },
-      vertexColors: true,
-      side: THREE.DoubleSide,
-    });
-
-    this.edgeMesh = new THREE.Mesh(geometry, material);
-    this.edgeMesh.frustumCulled = false;
-    this.scene.add(this.edgeMesh);
   }
 
   private createTownMesh(): void {
     const townRenderer = new TownRenderer();
     const geometry = townRenderer.render(this.planetMap.cells);
-
     const material = new THREE.ShaderMaterial({
       vertexShader: PLANET_VERTEX_SHADER,
       fragmentShader: PLANET_FRAGMENT_SHADER,
       uniforms: {
-        elevationScale: { value: 0.15 },
+        elevationScale: { value: TERRAIN_CONFIG.ELEVATION_SCALE },
         sunDirection: { value: this.sunPosition.clone().normalize() },
         isLine: { value: false },
       },
       vertexColors: true,
       extensions: { derivatives: true },
-      polygonOffset: true,
-      polygonOffsetFactor: -1,
-      polygonOffsetUnits: -1,
+      glslVersion: THREE.GLSL3,
     });
-
     this.townMesh = new THREE.Mesh(geometry, material);
     this.townMesh.frustumCulled = false;
     this.scene.add(this.townMesh);
@@ -610,7 +506,6 @@ export class GlobeRenderer {
     const animate = () => {
       requestAnimationFrame(animate);
 
-      // Disable vertical tilt in OrbitControls when in TILT mode to avoid conflicts
       if (this.isTiltMode) {
         this.controls.minPolarAngle = this.controls.getPolarAngle();
         this.controls.maxPolarAngle = this.controls.getPolarAngle();
@@ -621,94 +516,62 @@ export class GlobeRenderer {
       
       this.controls.update();
 
-      // Dynamic Rotation Speed based on distance (Zoom-Sensitive)
       const dist = this.camera.position.length();
       const t = Math.max(0, Math.min(1, (dist - ROTATION_CONFIG.MIN_DISTANCE) / (ROTATION_CONFIG.MAX_DISTANCE - ROTATION_CONFIG.MIN_DISTANCE)));
       this.controls.rotateSpeed = ROTATION_CONFIG.MIN_SPEED + t * (ROTATION_CONFIG.MAX_SPEED - ROTATION_CONFIG.MIN_SPEED);
 
-      // TILT PHYSICS LOOP
-      // 1. Apply Velocity
       this.tiltAngle += this.tiltVelocity;
-      
-      // 2. Apply Friction
       if (!this.isDraggingTilt) {
         this.tiltVelocity *= TILT_CONFIG.FRICTION;
+        if (this.tiltAngle < TILT_CONFIG.MIN_ANGLE) {
+          this.tiltVelocity += (TILT_CONFIG.MIN_ANGLE - this.tiltAngle) * TILT_CONFIG.SPRING_K;
+        } else if (this.tiltAngle > TILT_CONFIG.MAX_ANGLE) {
+          this.tiltVelocity += (TILT_CONFIG.MAX_ANGLE - this.tiltAngle) * TILT_CONFIG.SPRING_K;
+        }
       } else {
-        // While dragging, we damp velocity slightly to keep it manageable
         this.tiltVelocity *= 0.8;
       }
 
-      // 3. Spring-back from overshoots (Elastic boundaries)
-      // Only rollback after the user has stopped actively dragging
-      if (!this.isDraggingTilt) {
-        if (this.tiltAngle < TILT_CONFIG.MIN_ANGLE) {
-          const diff = TILT_CONFIG.MIN_ANGLE - this.tiltAngle;
-          this.tiltVelocity += diff * TILT_CONFIG.SPRING_K;
-        } else if (this.tiltAngle > TILT_CONFIG.MAX_ANGLE) {
-          const diff = TILT_CONFIG.MAX_ANGLE - this.tiltAngle;
-          this.tiltVelocity += diff * TILT_CONFIG.SPRING_K;
-        }
-      }
+      this.tiltAngle = Math.max(TILT_CONFIG.MIN_ANGLE - TILT_CONFIG.OVERSHOOT_MAX, Math.min(TILT_CONFIG.MAX_ANGLE + TILT_CONFIG.OVERSHOOT_MAX, this.tiltAngle));
 
-      // 4. Hard Clamps (Safety limits)
-      this.tiltAngle = Math.max(
-        TILT_CONFIG.MIN_ANGLE - TILT_CONFIG.OVERSHOOT_MAX,
-        Math.min(TILT_CONFIG.MAX_ANGLE + TILT_CONFIG.OVERSHOOT_MAX, this.tiltAngle)
-      );
-
-      // Update render camera based on controls camera
       this.renderCamera.copy(this.camera);
       this.renderCamera.aspect = this.camera.aspect;
       this.renderCamera.updateProjectionMatrix();
 
       if (this.tiltAngle !== 0) {
-        // TILT LOGIC: Rotate around the point on the surface (r=1.0) directly under the camera
         const surfacePoint = this.camera.position.clone().normalize();
-        
         const cameraDir = new THREE.Vector3();
         this.camera.getWorldDirection(cameraDir);
         const right = new THREE.Vector3().crossVectors(this.camera.up, cameraDir).normalize();
-
         this.renderCamera.position.sub(surfacePoint);
-        
         const rotation = new THREE.Matrix4().makeRotationAxis(right, -this.tiltAngle);
         this.renderCamera.position.applyMatrix4(rotation);
-        this.renderCamera.quaternion.multiplyQuaternions(
-          new THREE.Quaternion().setFromAxisAngle(right, -this.tiltAngle),
-          this.renderCamera.quaternion
-        );
-        
+        this.renderCamera.quaternion.multiplyQuaternions(new THREE.Quaternion().setFromAxisAngle(right, -this.tiltAngle), this.renderCamera.quaternion);
         this.renderCamera.position.add(surfacePoint);
       }
 
       this.updateViewportDisplay();
-      this.renderer.render(this.scene, this.renderCamera);
+
+      // Ensure RenderPass uses the correctly transformed camera
+      const renderPass = this.composer.passes[0] as RenderPass;
+      if (renderPass) renderPass.camera = this.renderCamera;
+
+      this.composer.render();
     };
     animate();
   }
-  /**
-   * Updates the HTML label with current camera-centered lat/lng and zoom level.
-   */
+
   private updateViewportDisplay(): void {
     if (!this.coordsElement) return;
-
     const pos = this.camera.position.clone().normalize();
-
-    // Convert Cartesian direction to Spherical coordinates
     const lat = 90 - (Math.acos(pos.y) * 180) / Math.PI;
     let lon = (Math.atan2(pos.z, pos.x) * 180) / Math.PI - 180;
-
-    // Wrap longitude to [-180, 180]
     if (lon < -180) lon += 360;
     if (lon > 180) lon -= 360;
-
-    // Zoom calculation: distance of 2.8 is ~1.0x zoom
     const distance = this.camera.position.length();
     const zoom = 2.8 / distance;
-
     const tiltIndicator = this.isTiltMode ? ' <span style="color: #fbbf24">[TILT MODE]</span>' : '';
     const tiltDeg = (this.tiltAngle * 180 / Math.PI).toFixed(1);
-    
     this.coordsElement.innerHTML = `Lat: ${lat.toFixed(2)} | Lng: ${lon.toFixed(2)} | Zoom: ${zoom.toFixed(2)}x | Tilt: ${tiltDeg}°${tiltIndicator}`;
   }
 }

@@ -15,9 +15,13 @@ export const TILT_CONFIG = {
   * Camera Rotation Configuration
   */
   export const ROTATION_CONFIG = {
-  MIN_DISTANCE: 1.25, // Closest zoom
-  MAX_DISTANCE: 4.0,  // Standard zoom reference
-  MIN_SPEED: 0.05,    // Rotation speed at closest zoom (Very slow for precision)
-  MAX_SPEED: 0.8,     // Rotation speed at max zoom
+    MIN_DISTANCE: 1.25, // Closest zoom
+    MAX_DISTANCE: 4.0,  // Standard zoom reference
+    MIN_SPEED: 0.05,    // Rotation speed at closest zoom (Very slow for precision)
+    MAX_SPEED: 0.8,     // Rotation speed at max zoom
   };
 
+  export const TERRAIN_CONFIG = {
+    ELEVATION_SCALE: 0.06, // Subtle elevation (was 0.15)
+    SEA_LEVEL: 0.0,        // Base level for global oceans
+  };

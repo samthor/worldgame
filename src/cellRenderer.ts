@@ -13,6 +13,7 @@ export class TownRenderer extends CellRenderer {
   public render(cells: Cell[]): THREE.BufferGeometry {
     const positions: number[] = [];
     const colors: number[] = [];
+    const cellIds: number[] = [];
 
     // Filter for cells that should have towns (e.g., Grassland, Plains)
     const townCells = cells.filter(
@@ -20,7 +21,7 @@ export class TownRenderer extends CellRenderer {
     );
 
     townCells.forEach((cell) => {
-      // Create 1-3 houses per town cell
+      // Create 1-3 houses per town town cell
       const houseCount = 1 + Math.floor(Math.random() * 3);
       for (let i = 0; i < houseCount; i++) {
         // Jitter position within the cell (small offsets in lon/lat)
@@ -31,19 +32,22 @@ export class TownRenderer extends CellRenderer {
         const size = 0.25; // 0.25 degrees wide/tall
         const height = 0.015; // 0.015 radius units tall
 
-        this.addCube(positions, colors, lon, lat, el, size, height);
+        this.addCube(positions, colors, cellIds, cell.id, lon, lat, el, size, height);
       }
     });
 
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
     geometry.setAttribute('vCellColor', new THREE.Float32BufferAttribute(colors, 3));
+    geometry.setAttribute('vCellId', new THREE.Float32BufferAttribute(cellIds, 1));
     return geometry;
   }
 
   private addCube(
     positions: number[],
     colors: number[],
+    cellIds: number[],
+    cellId: number,
     lon: number,
     lat: number,
     el: number,
@@ -80,6 +84,7 @@ export class TownRenderer extends CellRenderer {
       face.forEach((idx) => {
         positions.push(...v[idx]);
         colors.push(baseColor.r, baseColor.g, baseColor.b);
+        cellIds.push(cellId);
       });
     });
   }

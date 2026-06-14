@@ -12,13 +12,10 @@ export class GlobeGeometryRenderer {
     this.planetMap = planetMap;
   }
 
-  /**
-   * Creates a single BufferGeometry representing all land and coast cells,
-   * using "flat" (lon, lat, el) coordinates to be warped by a shader.
-   */
   public createLandGeometry(): THREE.BufferGeometry {
     const positions: number[] = [];
     const colors: number[] = [];
+    const cellIds: number[] = [];
 
     const landCells = this.planetMap.cells.filter((c) => c.isLand || c.isCoast);
 
@@ -41,6 +38,7 @@ export class GlobeGeometryRenderer {
           p1[0], p1[1], cell.elevation
         );
         colors.push(...cellColor, ...cellColor, ...cellColor);
+        cellIds.push(cell.id, cell.id, cell.id);
       }
 
       // 2. Draw "Walls"
@@ -61,19 +59,23 @@ export class GlobeGeometryRenderer {
             if (isP1Shared && isP2Shared) {
               const wallColor = cellColor.map(c => c * 0.7);
 
+              // If neighbor is water, extend the wall into the sphere (-0.05)
+              const bottomElevation = neighbor.isLand ? neighbor.elevation : -0.05;
+
               // Wall triangle 1
               positions.push(
                 p1[0], p1[1], cell.elevation,
                 p2[0], p2[1], cell.elevation,
-                p1[0], p1[1], neighbor.elevation
+                p1[0], p1[1], bottomElevation
               );
               // Wall triangle 2
               positions.push(
                 p2[0], p2[1], cell.elevation,
-                p2[0], p2[1], neighbor.elevation,
-                p1[0], p1[1], neighbor.elevation
+                p2[0], p2[1], bottomElevation,
+                p1[0], p1[1], bottomElevation
               );
               colors.push(...wallColor, ...wallColor, ...wallColor, ...wallColor, ...wallColor, ...wallColor);
+              cellIds.push(cell.id, cell.id, cell.id, cell.id, cell.id, cell.id);
             }
           }
         }
@@ -83,6 +85,7 @@ export class GlobeGeometryRenderer {
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
     geometry.setAttribute('vCellColor', new THREE.Float32BufferAttribute(colors, 3));
+    geometry.setAttribute('vCellId', new THREE.Float32BufferAttribute(cellIds, 1));
 
     return geometry;
   }

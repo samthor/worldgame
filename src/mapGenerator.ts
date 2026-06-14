@@ -470,16 +470,15 @@ export function generatePlanetMap(customConfig?: MapConfig): PlanetMap {
     }
 
     if (hasSeaCell) {
-      // Global Ocean group: set to fixed nominal sea level
-      // 0.005 is high enough to avoid Z-fighting with the ocean sphere
+      // Global Ocean group: set to fixed base sea level
       body.forEach((c) => {
-        c.elevation = 0.005;
+        c.elevation = 0.0;
       });
     } else {
-      // Inland Lake group: set to the lowest elevation in the group
+      // Inland Lake group: set to slightly below the lowest member
       const minElevation = Math.min(...body.map((c) => c.elevation));
       body.forEach((c) => {
-        c.elevation = minElevation;
+        c.elevation = Math.max(0, minElevation - 0.005);
       });
     }
   });
