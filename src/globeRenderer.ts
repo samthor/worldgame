@@ -1,5 +1,8 @@
 import { THREE, d3, OrbitControls } from './deps.js';
 import { PlanetMap } from './planetMap.js';
+import { GlobeGeometryRenderer } from './globeGeometryRenderer.js';
+import { PLANET_VERTEX_SHADER, PLANET_FRAGMENT_SHADER } from './planetShaders.js';
+import { TownRenderer } from './cellRenderer.js';
 
 export class GlobeRenderer {
   private readonly planetMap: PlanetMap;
@@ -10,17 +13,24 @@ export class GlobeRenderer {
   private controls!: any;
   private texture!: THREE.CanvasTexture;
   private sphere!: THREE.Mesh;
+  private landMesh?: THREE.Mesh;
+  private townMesh?: THREE.Mesh;
+  private oceanSphere?: THREE.Mesh;
   private canvas!: HTMLCanvasElement;
   private ctx!: CanvasRenderingContext2D;
   private coordsElement!: HTMLElement;
+  private isGeometryMode = true;
 
   constructor(planetMap: PlanetMap) {
     this.planetMap = planetMap;
     this.coordsElement = document.getElementById('coords')!;
     this.initCanvas();
     this.initThree();
-  }
+    this.setupModeToggle();
 
+    // Initial state set based on default
+    this.updateModeVisibility();
+  }
   private initCanvas(): void {
     const canvasWidth = 4096; // 4K resolution width
     const canvasHeight = 2048; // 4K resolution height
@@ -58,7 +68,7 @@ export class GlobeRenderer {
       };
 
       // Define base HSL values per cell type (inspired from Civilization)
-      let baseH = 80;  // Plains (golden-green)
+      let baseH = 80; // Plains (golden-green)
       let baseS = 50;
       let baseL = 56;
 
@@ -205,7 +215,9 @@ export class GlobeRenderer {
 
           const sharedPts: [number, number][] = [];
           for (const pt1 of ringA) {
-            const isShared = ringB.some(pt2 => Math.hypot(pt1[0] - pt2[0], pt1[1] - pt2[1]) < 0.001);
+            const isShared = ringB.some(
+              (pt2) => Math.hypot(pt1[0] - pt2[0], pt1[1] - pt2[1]) < 0.001,
+            );
             if (isShared) {
               sharedPts.push(pt1);
             }
@@ -219,7 +231,10 @@ export class GlobeRenderer {
 
             for (let a = 0; a < sharedPts.length; a++) {
               for (let b = a + 1; b < sharedPts.length; b++) {
-                const dist = Math.hypot(sharedPts[a][0] - sharedPts[b][0], sharedPts[a][1] - sharedPts[b][1]);
+                const dist = Math.hypot(
+                  sharedPts[a][0] - sharedPts[b][0],
+                  sharedPts[a][1] - sharedPts[b][1],
+                );
                 if (dist > maxDist) {
                   maxDist = dist;
                   p1_merged = sharedPts[a];
@@ -236,7 +251,7 @@ export class GlobeRenderer {
               if (centroidB) {
                 const mx = (p1[0] + p2[0]) / 2;
                 const my = (p1[1] + p2[1]) / 2;
-                
+
                 let cx = centroidB[0];
                 let cy = centroidB[1];
 
@@ -256,7 +271,7 @@ export class GlobeRenderer {
                 if (len > 0) {
                   const ux = dx / len;
                   const uy = dy / len;
-                  
+
                   // Offset by 3.5 pixels strictly into the lower cell (cellB)
                   const offset = 3.5;
                   const sx1 = p1[0] + ux * offset;
@@ -389,11 +404,116 @@ export class GlobeRenderer {
     this.sphere = new THREE.Mesh(geometry, material);
     this.scene.add(this.sphere);
 
+    // Create Ocean Sphere (slightly smaller to avoid Z-fighting with land geometry)
+    const oceanGeometry = new THREE.SphereGeometry(0.998, 64, 64);
+    const oceanMaterial = new THREE.MeshPhongMaterial({
+      color: 0x0a1a2f,
+      transparent: true,
+      opacity: 0.9,
+      shininess: 30,
+    });
+    this.oceanSphere = new THREE.Mesh(oceanGeometry, oceanMaterial);
+    this.oceanSphere.visible = false;
+    this.scene.add(this.oceanSphere);
+
+    // Setup Lighting for Geometry Mode
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+    this.scene.add(ambientLight);
+
+    const mainLight = new THREE.DirectionalLight(0xffffff, 1.2);
+    mainLight.position.set(5, 5, 5);
+    this.scene.add(mainLight);
+
+    const fillLight = new THREE.DirectionalLight(0xffffff, 0.5);
+    fillLight.position.set(-5, 2, -5);
+    this.scene.add(fillLight);
+
     window.addEventListener('resize', () => {
       this.camera.aspect = window.innerWidth / window.innerHeight;
       this.camera.updateProjectionMatrix();
       this.renderer.setSize(window.innerWidth, window.innerHeight);
     });
+  }
+
+  private setupModeToggle(): void {
+    window.addEventListener('keydown', (e) => {
+      if (e.key.toLowerCase() === 'g') {
+        this.toggleMode();
+      }
+    });
+
+    // Also add to UI info
+    const info = document.getElementById('info');
+    if (info) {
+      info.innerHTML +=
+        '<br><br><span style="color: #4ade80">Press [G] to toggle 3D Geometry Mode</span>';
+    }
+  }
+
+  private toggleMode(): void {
+    this.isGeometryMode = !this.isGeometryMode;
+    this.updateModeVisibility();
+  }
+
+  private updateModeVisibility(): void {
+    if (this.isGeometryMode) {
+      // Switch to Geometry Mode
+      this.sphere.visible = false;
+      if (!this.landMesh) {
+        this.createLandMesh();
+      }
+      if (!this.townMesh) {
+        this.createTownMesh();
+      }
+      if (this.landMesh) this.landMesh.visible = true;
+      if (this.townMesh) this.townMesh.visible = true;
+      if (this.oceanSphere) this.oceanSphere.visible = true;
+    } else {
+      // Switch to Texture Mode
+      this.sphere.visible = true;
+      if (this.landMesh) this.landMesh.visible = false;
+      if (this.townMesh) this.townMesh.visible = false;
+      if (this.oceanSphere) this.oceanSphere.visible = false;
+    }
+  }
+
+  private createLandMesh(): void {
+    const geoRenderer = new GlobeGeometryRenderer(this.planetMap);
+    const geometry = geoRenderer.createLandGeometry();
+
+    const material = new THREE.ShaderMaterial({
+      vertexShader: PLANET_VERTEX_SHADER,
+      fragmentShader: PLANET_FRAGMENT_SHADER,
+      uniforms: {
+        elevationScale: { value: 0.15 },
+      },
+      vertexColors: true,
+      side: THREE.FrontSide,
+      extensions: { derivatives: true }, // Required for dFdx/dFdy in fragment shader
+    });
+
+    this.landMesh = new THREE.Mesh(geometry, material);
+    this.landMesh.frustumCulled = false; // Important because "flat" positions aren't the real spherical ones
+    this.scene.add(this.landMesh);
+  }
+
+  private createTownMesh(): void {
+    const townRenderer = new TownRenderer();
+    const geometry = townRenderer.render(this.planetMap.cells);
+
+    const material = new THREE.ShaderMaterial({
+      vertexShader: PLANET_VERTEX_SHADER,
+      fragmentShader: PLANET_FRAGMENT_SHADER,
+      uniforms: {
+        elevationScale: { value: 0.15 },
+      },
+      vertexColors: true,
+      extensions: { derivatives: true },
+    });
+
+    this.townMesh = new THREE.Mesh(geometry, material);
+    this.townMesh.frustumCulled = false;
+    this.scene.add(this.townMesh);
   }
 
   public startAnimation(): void {
@@ -405,7 +525,6 @@ export class GlobeRenderer {
     };
     animate();
   }
-
   /**
    * Updates the HTML label with current camera-centered lat/lng and zoom level.
    */
