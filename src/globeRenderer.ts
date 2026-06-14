@@ -28,6 +28,10 @@ export class GlobeRenderer {
   private isGeometryMode = true;
   private isTiltMode = false;
   
+  // Selection State
+  private mousePos = new THREE.Vector2(-1, -1);
+  private hoveredCellId: number | null = null;
+  
   // World-Space Sun position (Equatorial Plane, 1 AU in Earth-Radius units)
   private sunPosition = new THREE.Vector3(23481, 0, 0);
   
@@ -61,6 +65,10 @@ export class GlobeRenderer {
     };
 
     const handleMouseMove = (e: MouseEvent) => {
+      // Record mouse position for GPU picking
+      this.mousePos.x = e.clientX;
+      this.mousePos.y = e.clientY;
+
       if (this.isTiltMode && e.buttons === 1) {
         this.isDraggingTilt = true;
         const dy = e.clientY - lastY;
@@ -404,6 +412,7 @@ export class GlobeRenderer {
     this.composer.addPass(new RenderPass(this.scene, this.camera));
 
     this.edgePass = new ShaderPass(EDGE_SHADER);
+    this.edgePass.uniforms.hoveredCellId.value = -1.0;
     this.edgePass.uniforms.resolution.value = new THREE.Vector2(
       window.innerWidth * window.devicePixelRatio,
       window.innerHeight * window.devicePixelRatio
@@ -470,6 +479,7 @@ export class GlobeRenderer {
       uniforms: {
         elevationScale: { value: TERRAIN_CONFIG.ELEVATION_SCALE },
         sunDirection: { value: this.sunPosition.clone().normalize() },
+        hoveredCellId: { value: -1.0 },
         isLine: { value: false },
       },
       vertexColors: true,
@@ -491,6 +501,7 @@ export class GlobeRenderer {
       uniforms: {
         elevationScale: { value: TERRAIN_CONFIG.ELEVATION_SCALE },
         sunDirection: { value: this.sunPosition.clone().normalize() },
+        hoveredCellId: { value: -1.0 },
         isLine: { value: false },
       },
       vertexColors: true,
@@ -505,6 +516,9 @@ export class GlobeRenderer {
   public startAnimation(): void {
     const animate = () => {
       requestAnimationFrame(animate);
+
+      // Perform GPU picking to find hovered cell
+      this.updateHoveredCell();
 
       if (this.isTiltMode) {
         this.controls.minPolarAngle = this.controls.getPolarAngle();
@@ -561,6 +575,52 @@ export class GlobeRenderer {
     animate();
   }
 
+  /**
+   * Performs GPU-based picking to identify the cell under the mouse.
+   * Reads the raw float ID from the Alpha channel of the render target.
+   */
+  private updateHoveredCell(): void {
+    if (!this.composer || !this.isGeometryMode) return;
+
+    // 1. Get pixel coordinates (flipping Y for WebGL)
+    const x = this.mousePos.x * window.devicePixelRatio;
+    const y = (window.innerHeight - this.mousePos.y) * window.devicePixelRatio;
+
+    // 2. Read the pixel from the composer's write buffer (the one containing the raw pass)
+    // We read a 1x1 area
+    const pixel = new Float32Array(4);
+    this.renderer.readRenderTargetPixels(
+      this.composer.readBuffer,
+      x, y, 1, 1,
+      pixel
+    );
+
+    // 3. Extract and decode ID
+    // Our encoding: idAlpha = fCellId + 1.0;
+    const rawId = pixel[3]; 
+    const cellId = Math.round(rawId - 1.0);
+
+    // 4. Update state and uniforms
+    if (cellId >= 0 && cellId < this.planetMap.cells.length) {
+      this.hoveredCellId = cellId;
+    } else {
+      this.hoveredCellId = null;
+    }
+
+    const idVal = this.hoveredCellId ?? -1.0;
+    
+    // Update all materials with the hovered ID
+    if (this.landMesh) {
+      (this.landMesh.material as THREE.ShaderMaterial).uniforms.hoveredCellId.value = idVal;
+    }
+    if (this.townMesh) {
+      (this.townMesh.material as THREE.ShaderMaterial).uniforms.hoveredCellId.value = idVal;
+    }
+    if (this.edgePass) {
+      this.edgePass.uniforms.hoveredCellId.value = idVal;
+    }
+  }
+
   private updateViewportDisplay(): void {
     if (!this.coordsElement) return;
     const pos = this.camera.position.clone().normalize();
@@ -572,6 +632,16 @@ export class GlobeRenderer {
     const zoom = 2.8 / distance;
     const tiltIndicator = this.isTiltMode ? ' <span style="color: #fbbf24">[TILT MODE]</span>' : '';
     const tiltDeg = (this.tiltAngle * 180 / Math.PI).toFixed(1);
-    this.coordsElement.innerHTML = `Lat: ${lat.toFixed(2)} | Lng: ${lon.toFixed(2)} | Zoom: ${zoom.toFixed(2)}x | Tilt: ${tiltDeg}°${tiltIndicator}`;
-  }
-}
+
+    let hoveredInfo = '';
+    if (this.hoveredCellId !== null) {
+      const cell = this.planetMap.getCell(this.hoveredCellId);
+      if (cell) {
+        hoveredInfo = ` | <span style="color: #4ade80">Cell: ${cell.id} (${cell.biome}, El: ${cell.elevation.toFixed(3)})</span>`;
+      }
+    }
+
+    this.coordsElement.innerHTML = `Lat: ${lat.toFixed(2)} | Lng: ${lon.toFixed(2)} | Zoom: ${zoom.toFixed(2)}x | Tilt: ${tiltDeg}°${tiltIndicator}${hoveredInfo}`;
+    }
+    }
+

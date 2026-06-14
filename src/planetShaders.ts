@@ -52,6 +52,7 @@ export const PLANET_FRAGMENT_SHADER = `
 
   uniform vec3 sunDirection; 
   uniform bool isLine;
+  uniform float hoveredCellId;
 
   vec3 saturation(vec3 rgb, float adjustment) {
     const vec3 W = vec3(0.2125, 0.7154, 0.0721);
@@ -81,6 +82,10 @@ export const PLANET_FRAGMENT_SHADER = `
     if (isLine) {
       pc_fragColor = vec4(saturatedColor * 0.2, idAlpha);
     } else {
+      // Highlight hovered cell surface
+      if (abs(fCellId - hoveredCellId) < 0.1) {
+        finalColor = mix(finalColor, vec3(1.0), 0.15); // Subtle white tint
+      }
       pc_fragColor = vec4(finalColor, idAlpha);
     }
   }

@@ -6,7 +6,8 @@ export const EDGE_SHADER = {
   uniforms: {
     'tDiffuse': { value: null },
     'resolution': { value: null },
-    'thickness': { value: 1.0 }
+    'thickness': { value: 1.0 },
+    'hoveredCellId': { value: -1.0 }
   },
   vertexShader: `
     varying vec2 vUv;
@@ -19,41 +20,55 @@ export const EDGE_SHADER = {
     uniform sampler2D tDiffuse;
     uniform vec2 resolution;
     uniform float thickness;
+    uniform float hoveredCellId;
     varying vec2 vUv;
 
     void main() {
       vec2 texel = vec2(1.0 / resolution.x, 1.0 / resolution.y) * thickness;
 
       // Sample 3x3 grid around current UV
-      // Channel .a is normalized Cell ID (Perfectly solid per cell due to 'flat' varyings)
+      // Channel .a is normalized Cell ID (+1.0)
       
-      float a00 = texture2D(tDiffuse, vUv + texel * vec2(-1, -1)).a;
-      float a10 = texture2D(tDiffuse, vUv + texel * vec2( 0, -1)).a;
-      float a20 = texture2D(tDiffuse, vUv + texel * vec2( 1, -1)).a;
-      float a01 = texture2D(tDiffuse, vUv + texel * vec2(-1,  0)).a;
-      float a11 = texture2D(tDiffuse, vUv + texel * vec2( 0,  0)).a;
-      float a21 = texture2D(tDiffuse, vUv + texel * vec2( 1,  0)).a;
-      float a02 = texture2D(tDiffuse, vUv + texel * vec2(-1,  1)).a;
-      float a12 = texture2D(tDiffuse, vUv + texel * vec2( 0,  1)).a;
-      float a22 = texture2D(tDiffuse, vUv + texel * vec2( 1,  1)).a;
+      vec4 s00 = texture2D(tDiffuse, vUv + texel * vec2(-1, -1));
+      vec4 s10 = texture2D(tDiffuse, vUv + texel * vec2( 0, -1));
+      vec4 s20 = texture2D(tDiffuse, vUv + texel * vec2( 1, -1));
+      vec4 s01 = texture2D(tDiffuse, vUv + texel * vec2(-1,  0));
+      vec4 s11 = texture2D(tDiffuse, vUv + texel * vec2( 0,  0));
+      vec4 s21 = texture2D(tDiffuse, vUv + texel * vec2( 1,  0));
+      vec4 s02 = texture2D(tDiffuse, vUv + texel * vec2(-1,  1));
+      vec4 s12 = texture2D(tDiffuse, vUv + texel * vec2( 0,  1));
+      vec4 s22 = texture2D(tDiffuse, vUv + texel * vec2( 1,  1));
+
+      float a00 = s00.a; float a10 = s10.a; float a20 = s20.a;
+      float a01 = s01.a; float a11 = s11.a; float a21 = s21.a;
+      float a02 = s02.a; float a12 = s12.a; float a22 = s22.a;
 
       // SOBEL ON CELL ID (Alpha)
       float hId = a00 + 2.0 * a01 + a02 - a20 - 2.0 * a21 - a22;
       float vId = a00 + 2.0 * a10 + a20 - a02 - 2.0 * a12 - a22;
       float magId = sqrt(hId * hId + vId * vId);
 
+      // Identify if we are bordering the hovered cell
+      bool isHoveredEdge = false;
+      float target = hoveredCellId + 1.0;
+      if (abs(target) > 0.1) { // Only if valid hover
+        // If current or ANY neighbor is the target, and we have a jump, it's a hovered edge
+        if (abs(a11 - target) < 0.1 || abs(a10 - target) < 0.1 || abs(a12 - target) < 0.1 || 
+            abs(a01 - target) < 0.1 || abs(a21 - target) < 0.1) {
+          isHoveredEdge = (magId > 0.1);
+        }
+      }
+
       // Final mix
-      vec3 edgeColor = vec3(0.0, 0.0, 0.0);
+      vec3 edgeColor = isHoveredEdge ? vec3(1.0, 1.0, 1.0) : vec3(0.0, 0.0, 0.0);
+      float edgeAlpha = isHoveredEdge ? 0.95 : 0.8;
       
-      // Threshold: Since we use 32-bit floats and raw IDs, 
-      // any magId > 0.1 is a definitive boundary.
       float idEdge = smoothstep(0.1, 0.2, magId); 
-      
       float edgeStrength = idEdge;
 
-      // Output original color mixed with dark edges
-      vec3 originalColor = texture2D(tDiffuse, vUv).rgb;
-      gl_FragColor = vec4(mix(originalColor, edgeColor, edgeStrength * 0.8), 1.0);
+      // Output original color mixed with dark (or glowing white) edges
+      vec3 originalColor = s11.rgb;
+      gl_FragColor = vec4(mix(originalColor, edgeColor, edgeStrength * edgeAlpha), 1.0);
     }
   `
 };
