@@ -1,4 +1,4 @@
-import { THREE, d3, MapControls } from './deps.js';
+import { THREE, d3, OrbitControls } from './deps.js';
 import { PlanetMap } from './planetMap.js';
 import { GlobeGeometryRenderer } from './globeGeometryRenderer.js';
 import { PLANET_VERTEX_SHADER, PLANET_FRAGMENT_SHADER } from './planetShaders.js';
@@ -20,6 +20,7 @@ export class GlobeRenderer {
   private ctx!: CanvasRenderingContext2D;
   private coordsElement!: HTMLElement;
   private isGeometryMode = true;
+  private isTiltMode = false;
 
   constructor(planetMap: PlanetMap) {
     this.planetMap = planetMap;
@@ -27,9 +28,31 @@ export class GlobeRenderer {
     this.initCanvas();
     this.initThree();
     this.setupModeToggle();
+    this.setupKeyListeners();
 
     // Initial state set based on default
     this.updateModeVisibility();
+  }
+
+  private setupKeyListeners(): void {
+    const handleKeys = (e: KeyboardEvent) => {
+      const isPressed = e.metaKey || e.ctrlKey;
+      if (isPressed !== this.isTiltMode) {
+        this.isTiltMode = isPressed;
+        if (this.isTiltMode) {
+          // TODO: Enact TILT mode start behavior
+        } else {
+          // TODO: Enact TILT mode end behavior
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeys);
+    window.addEventListener('keyup', handleKeys);
+    window.addEventListener('blur', () => {
+      this.isTiltMode = false;
+      // TODO: Enact TILT mode end behavior
+    });
   }
   private initCanvas(): void {
     const canvasWidth = 4096; // 4K resolution width
@@ -379,21 +402,34 @@ export class GlobeRenderer {
       0.1,
       1000,
     );
-    this.camera.position.z = 2.8;
+    // Initial position at a tilted 45-degree angle for immediate 3D depth perception
+    this.camera.position.set(0, 1.8, 1.8);
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.setPixelRatio(window.devicePixelRatio);
+
+    // Modern Three.js defaults to Linear color space, we need SRGB for vibrancy
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.5; // Increased exposure
+
     document.body.appendChild(this.renderer.domElement);
 
-    this.controls = new MapControls(this.camera, this.renderer.domElement);
+    this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.05;
-    this.controls.screenSpacePanning = false; // Keep panning aligned with the globe surface
-    
+    this.controls.enablePan = false; // Completely disable panning
+
+    this.controls.mouseButtons = {
+      LEFT: THREE.MOUSE.ROTATE,
+      MIDDLE: THREE.MOUSE.DOLLY,
+      RIGHT: THREE.MOUSE.PAN, // This is still mapped but enablePan=false will block it
+    };
+
     // Limits for better 3D navigation
-    this.controls.minPolarAngle = 0.1;
-    this.controls.maxPolarAngle = Math.PI - 0.2;
+    this.controls.minPolarAngle = 0;
+    this.controls.maxPolarAngle = Math.PI; // Allow full access to South Pole
 
     this.texture = new THREE.CanvasTexture(this.canvas);
     this.texture.minFilter = THREE.LinearMipmapLinearFilter;
@@ -422,14 +458,14 @@ export class GlobeRenderer {
     this.scene.add(this.oceanSphere);
 
     // Setup Lighting for Geometry Mode
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+    const ambientLight = new THREE.AmbientLight(0xffffff, 1.0);
     this.scene.add(ambientLight);
 
-    const mainLight = new THREE.DirectionalLight(0xffffff, 1.2);
+    const mainLight = new THREE.DirectionalLight(0xffffff, 2.5);
     mainLight.position.set(5, 5, 5);
     this.scene.add(mainLight);
 
-    const fillLight = new THREE.DirectionalLight(0xffffff, 0.5);
+    const fillLight = new THREE.DirectionalLight(0xffffff, 1.2);
     fillLight.position.set(-5, 2, -5);
     this.scene.add(fillLight);
 
@@ -524,6 +560,7 @@ export class GlobeRenderer {
   public startAnimation(): void {
     const animate = () => {
       requestAnimationFrame(animate);
+
       this.controls.update();
       this.updateViewportDisplay();
       this.renderer.render(this.scene, this.camera);
@@ -550,6 +587,7 @@ export class GlobeRenderer {
     const distance = this.camera.position.length();
     const zoom = 2.8 / distance;
 
-    this.coordsElement.innerText = `Lat: ${lat.toFixed(2)} | Lng: ${lon.toFixed(2)} | Zoom: ${zoom.toFixed(2)}x`;
+    const tiltIndicator = this.isTiltMode ? ' <span style="color: #fbbf24">[TILT MODE]</span>' : '';
+    this.coordsElement.innerHTML = `Lat: ${lat.toFixed(2)} | Lng: ${lon.toFixed(2)} | Zoom: ${zoom.toFixed(2)}x${tiltIndicator}`;
   }
 }
