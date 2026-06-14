@@ -8,6 +8,7 @@ export interface MapConfig {
   seaLevel?: number;
   noiseScale?: number;
   mergeThreshold?: number;
+  minSiteDistance?: number;
 }
 
 const DEFAULT_CONFIG: Required<MapConfig> = {
@@ -16,6 +17,7 @@ const DEFAULT_CONFIG: Required<MapConfig> = {
   seaLevel: 0.15,
   noiseScale: 0.8, // Lower frequency = larger continents and oceans
   mergeThreshold: 1, // Edge size threshold (degrees) below which vertices are collapsed
+  minSiteDistance: 1.5, // Minimum distance (degrees) between site seeds
 };
 
 export function generatePlanetMap(customConfig?: MapConfig): PlanetMap {
@@ -103,9 +105,9 @@ export function generatePlanetMap(customConfig?: MapConfig): PlanetMap {
     //   return 0.05; // Mountains: very low weight means they stay dense and jagged
     // }
 
-    // Plains, Desert, Tundra: transitions from 1.0 (fully relaxed hexagons) to 0.05 (jagged)
+    // Plains, Desert, Tundra: transitions from 1.0 (fully relaxed hexagons) to 0.12 (jagged)
     const t = heightAboveSea / 0.4;
-    const baseW = 1.0 * (1 - t) + 0.05 * t;
+    const baseW = 1.0 * (1 - t) + 0.12 * t;
     // Modulate by regional regularity (chaotic regions are relaxed far less)
     return baseW * (0.08 * (1 - reg) + 1.0 * reg);
   }
@@ -181,7 +183,17 @@ export function generatePlanetMap(customConfig?: MapConfig): PlanetMap {
   }
 
   const shuffledCandidates = shuffle(candidates);
-  let sites = shuffledCandidates.slice(0, Math.min(config.numCells, shuffledCandidates.length));
+  
+  // Greedy selection to ensure minSiteDistance
+  let sites: [number, number][] = [];
+  for (const cand of shuffledCandidates) {
+    if (sites.length >= config.numCells) break;
+    
+    const tooClose = sites.some(s => Math.hypot(s[0] - cand[0], s[1] - cand[1]) < config.minSiteDistance);
+    if (!tooClose) {
+      sites.push(cand);
+    }
+  }
 
   // 2. Spatially-Varying Lloyd's Relaxation Loop
   for (let step = 0; step < config.relaxationSteps; step++) {
@@ -249,6 +261,14 @@ export function generatePlanetMap(customConfig?: MapConfig): PlanetMap {
   }
 
   sites = splitSites;
+
+  // Final pruning pass to ensure no sites are too close after splitting
+  const prunedSites: [number, number][] = [];
+  for (const s of sites) {
+    const tooClose = prunedSites.some(p => Math.hypot(p[0] - s[0], p[1] - s[1]) < config.minSiteDistance * 0.7);
+    if (!tooClose) prunedSites.push(s);
+  }
+  sites = prunedSites;
 
   // Run 2 extra relaxation steps on the split sites to smooth out the new cells seamlessly
   if (splitCount > 0) {
