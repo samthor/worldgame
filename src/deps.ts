@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { OrbitControls, MapControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import * as d3Base from 'd3';
 import { geoVoronoi } from 'd3-geo-voronoi';
 import SimplexNoise from 'simplex-noise';
@@ -10,4 +10,4 @@ export const d3 = {
   geoVoronoi
 };
 
-export { THREE, OrbitControls, SimplexNoise };
+export { THREE, OrbitControls, MapControls, SimplexNoise };

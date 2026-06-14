@@ -1,4 +1,4 @@
-import { THREE, d3, OrbitControls } from './deps.js';
+import { THREE, d3, MapControls } from './deps.js';
 import { PlanetMap } from './planetMap.js';
 import { GlobeGeometryRenderer } from './globeGeometryRenderer.js';
 import { PLANET_VERTEX_SHADER, PLANET_FRAGMENT_SHADER } from './planetShaders.js';
@@ -386,9 +386,14 @@ export class GlobeRenderer {
     this.renderer.setPixelRatio(window.devicePixelRatio);
     document.body.appendChild(this.renderer.domElement);
 
-    this.controls = new OrbitControls(this.camera, this.renderer.domElement);
+    this.controls = new MapControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.05;
+    this.controls.screenSpacePanning = false; // Keep panning aligned with the globe surface
+    
+    // Limits for better 3D navigation
+    this.controls.minPolarAngle = 0.1;
+    this.controls.maxPolarAngle = Math.PI - 0.2;
 
     this.texture = new THREE.CanvasTexture(this.canvas);
     this.texture.minFilter = THREE.LinearMipmapLinearFilter;
