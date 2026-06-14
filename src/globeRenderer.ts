@@ -3,6 +3,7 @@ import { PlanetMap } from './planetMap.js';
 import { GlobeGeometryRenderer } from './globeGeometryRenderer.js';
 import { PLANET_VERTEX_SHADER, PLANET_FRAGMENT_SHADER } from './planetShaders.js';
 import { TownRenderer } from './cellRenderer.js';
+import { TILT_CONFIG } from './constants.js';
 
 export class GlobeRenderer {
   private readonly planetMap: PlanetMap;
@@ -21,6 +22,12 @@ export class GlobeRenderer {
   private coordsElement!: HTMLElement;
   private isGeometryMode = true;
   private isTiltMode = false;
+  
+  // Tilt State
+  private tiltAngle = TILT_CONFIG.DEFAULT_ANGLE;
+  private tiltVelocity = 0;
+  private isDraggingTilt = false;
+  private renderCamera!: THREE.PerspectiveCamera;
 
   constructor(planetMap: PlanetMap) {
     this.planetMap = planetMap;
@@ -35,23 +42,49 @@ export class GlobeRenderer {
   }
 
   private setupKeyListeners(): void {
+    let lastY = 0;
+
     const handleKeys = (e: KeyboardEvent) => {
       const isPressed = e.metaKey || e.ctrlKey;
       if (isPressed !== this.isTiltMode) {
         this.isTiltMode = isPressed;
-        if (this.isTiltMode) {
-          // TODO: Enact TILT mode start behavior
-        } else {
-          // TODO: Enact TILT mode end behavior
-        }
+        if (!this.isTiltMode) this.isDraggingTilt = false;
       }
+    };
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (this.isTiltMode && e.buttons === 1) {
+        this.isDraggingTilt = true;
+        const dy = e.clientY - lastY;
+        // Inverted: dragging DOWN (+dy) now tilts camera UP (-tiltAngle)
+        // Wait, user said "direction is wrong way around - just invert the delta change".
+        // Currently: +dy (dragging down) results in +tiltAngle (camera leans forward).
+        // If that was wrong, then dragging DOWN should result in -tiltAngle.
+        this.tiltVelocity -= dy * TILT_CONFIG.SENSITIVITY; 
+      }
+      lastY = e.clientY;
+    };
+
+    const handleMouseDown = (e: MouseEvent) => {
+      lastY = e.clientY;
+      if (this.isTiltMode) {
+        this.tiltVelocity = 0; // Stop any existing fling
+      }
+    };
+
+    const handleMouseUp = () => {
+      this.isDraggingTilt = false;
     };
 
     window.addEventListener('keydown', handleKeys);
     window.addEventListener('keyup', handleKeys);
+    window.addEventListener('mousemove', handleMouseMove, true);
+    window.addEventListener('mousedown', handleMouseDown, true);
+    window.addEventListener('mouseup', handleMouseUp, true);
+    
     window.addEventListener('blur', () => {
       this.isTiltMode = false;
-      // TODO: Enact TILT mode end behavior
+      this.isDraggingTilt = false;
     });
   }
   private initCanvas(): void {
@@ -402,8 +435,10 @@ export class GlobeRenderer {
       0.1,
       1000,
     );
-    // Initial position at a tilted 45-degree angle for immediate 3D depth perception
-    this.camera.position.set(0, 1.8, 1.8);
+    // Initial position
+    this.camera.position.set(0, 0, 2.8);
+    
+    this.renderCamera = this.camera.clone();
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     this.renderer.setSize(window.innerWidth, window.innerHeight);
@@ -561,9 +596,74 @@ export class GlobeRenderer {
     const animate = () => {
       requestAnimationFrame(animate);
 
+      // Disable vertical tilt in OrbitControls when in TILT mode to avoid conflicts
+      if (this.isTiltMode) {
+        this.controls.minPolarAngle = this.controls.getPolarAngle();
+        this.controls.maxPolarAngle = this.controls.getPolarAngle();
+      } else {
+        this.controls.minPolarAngle = 0;
+        this.controls.maxPolarAngle = Math.PI;
+      }
+      
       this.controls.update();
+
+      // TILT PHYSICS LOOP
+      // 1. Apply Velocity
+      this.tiltAngle += this.tiltVelocity;
+      
+      // 2. Apply Friction
+      if (!this.isDraggingTilt) {
+        this.tiltVelocity *= TILT_CONFIG.FRICTION;
+      } else {
+        // While dragging, we damp velocity slightly to keep it manageable
+        this.tiltVelocity *= 0.8;
+      }
+
+      // 3. Spring-back from overshoots (Elastic boundaries)
+      // Only rollback after the user has stopped actively dragging
+      if (!this.isDraggingTilt) {
+        if (this.tiltAngle < TILT_CONFIG.MIN_ANGLE) {
+          const diff = TILT_CONFIG.MIN_ANGLE - this.tiltAngle;
+          this.tiltVelocity += diff * TILT_CONFIG.SPRING_K;
+        } else if (this.tiltAngle > TILT_CONFIG.MAX_ANGLE) {
+          const diff = TILT_CONFIG.MAX_ANGLE - this.tiltAngle;
+          this.tiltVelocity += diff * TILT_CONFIG.SPRING_K;
+        }
+      }
+
+      // 4. Hard Clamps (Safety limits)
+      this.tiltAngle = Math.max(
+        TILT_CONFIG.MIN_ANGLE - TILT_CONFIG.OVERSHOOT_MAX,
+        Math.min(TILT_CONFIG.MAX_ANGLE + TILT_CONFIG.OVERSHOOT_MAX, this.tiltAngle)
+      );
+
+      // Update render camera based on controls camera
+      this.renderCamera.copy(this.camera);
+      this.renderCamera.aspect = this.camera.aspect;
+      this.renderCamera.updateProjectionMatrix();
+
+      if (this.tiltAngle !== 0) {
+        // TILT LOGIC: Rotate around the point on the surface (r=1.0) directly under the camera
+        const surfacePoint = this.camera.position.clone().normalize();
+        
+        const cameraDir = new THREE.Vector3();
+        this.camera.getWorldDirection(cameraDir);
+        const right = new THREE.Vector3().crossVectors(this.camera.up, cameraDir).normalize();
+
+        this.renderCamera.position.sub(surfacePoint);
+        
+        const rotation = new THREE.Matrix4().makeRotationAxis(right, -this.tiltAngle);
+        this.renderCamera.position.applyMatrix4(rotation);
+        this.renderCamera.quaternion.multiplyQuaternions(
+          new THREE.Quaternion().setFromAxisAngle(right, -this.tiltAngle),
+          this.renderCamera.quaternion
+        );
+        
+        this.renderCamera.position.add(surfacePoint);
+      }
+
       this.updateViewportDisplay();
-      this.renderer.render(this.scene, this.camera);
+      this.renderer.render(this.scene, this.renderCamera);
     };
     animate();
   }
@@ -588,6 +688,8 @@ export class GlobeRenderer {
     const zoom = 2.8 / distance;
 
     const tiltIndicator = this.isTiltMode ? ' <span style="color: #fbbf24">[TILT MODE]</span>' : '';
-    this.coordsElement.innerHTML = `Lat: ${lat.toFixed(2)} | Lng: ${lon.toFixed(2)} | Zoom: ${zoom.toFixed(2)}x${tiltIndicator}`;
+    const tiltDeg = (this.tiltAngle * 180 / Math.PI).toFixed(1);
+    
+    this.coordsElement.innerHTML = `Lat: ${lat.toFixed(2)} | Lng: ${lon.toFixed(2)} | Zoom: ${zoom.toFixed(2)}x | Tilt: ${tiltDeg}°${tiltIndicator}`;
   }
 }
