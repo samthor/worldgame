@@ -87,6 +87,64 @@ export class GlobeGeometryRenderer {
     return geometry;
   }
 
+  /**
+   * Creates a BufferGeometry representing the perimeter edges of all land/coast cells,
+   * rendered as physical ribbons (quads) so they have thickness that scales with zoom.
+   */
+  public createEdgeGeometry(): THREE.BufferGeometry {
+    const positions: number[] = [];
+    const colors: number[] = [];
+
+    const landCells = this.planetMap.cells.filter((c) => c.isLand || c.isCoast);
+    const ribbonWidth = 0.012; // Dramatically thicker (approx 3.5x previous)
+
+    landCells.forEach((cell) => {
+      const ring = (cell.coordinates[0] || []).slice(0, -1);
+      if (ring.length < 3) return;
+
+      const cellColor = this.getBiomeColor(cell);
+
+      for (let i = 0; i < ring.length; i++) {
+        const p1 = ring[i];
+        const p2 = ring[(i + 1) % ring.length];
+
+        // 1. Calculate a 'side' offset vector in [lon, lat] space
+        // This is a simplification: we just use the 2D perpendicular
+        const dx = p2[0] - p1[0];
+        const dy = p2[1] - p1[1];
+        const len = Math.hypot(dx, dy);
+        if (len === 0) continue;
+
+        const ux = -dy / len;
+        const uy = dx / len;
+
+        const offX = ux * ribbonWidth;
+        const offY = uy * ribbonWidth;
+
+        // 2. Generate 4 vertices for the ribbon quad
+        // Inner edge
+        const v1 = [p1[0], p1[1], cell.elevation];
+        const v2 = [p2[0], p2[1], cell.elevation];
+        // Outer edge (slightly offset)
+        const v3 = [p1[0] + offX, p1[1] + offY, cell.elevation];
+        const v4 = [p2[0] + offX, p2[1] + offY, cell.elevation];
+
+        // Triangle 1
+        positions.push(...v1, ...v2, ...v3);
+        colors.push(...cellColor, ...cellColor, ...cellColor);
+        // Triangle 2
+        positions.push(...v2, ...v4, ...v3);
+        colors.push(...cellColor, ...cellColor, ...cellColor);
+      }
+    });
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geometry.setAttribute('vCellColor', new THREE.Float32BufferAttribute(colors, 3));
+
+    return geometry;
+  }
+
   private calculateFaceNormal(
     v1: [number, number, number],
     v2: [number, number, number],

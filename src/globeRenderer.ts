@@ -16,13 +16,18 @@ export class GlobeRenderer {
   private texture!: THREE.CanvasTexture;
   private sphere!: THREE.Mesh;
   private landMesh?: THREE.Mesh;
+  private edgeMesh?: THREE.Mesh; // Changed from LineSegments to Mesh
   private townMesh?: THREE.Mesh;
   private oceanSphere?: THREE.Mesh;
+  private sunMesh!: THREE.Mesh;
   private canvas!: HTMLCanvasElement;
   private ctx!: CanvasRenderingContext2D;
   private coordsElement!: HTMLElement;
   private isGeometryMode = true;
   private isTiltMode = false;
+  
+  // World-Space Sun position (Equatorial Plane, 1 AU in Earth-Radius units)
+  private sunPosition = new THREE.Vector3(23481, 0, 0);
   
   // Tilt State
   private tiltAngle = TILT_CONFIG.DEFAULT_ANGLE;
@@ -394,7 +399,7 @@ export class GlobeRenderer {
       50,
       window.innerWidth / window.innerHeight,
       0.01,
-      1000,
+      50000, // Extended far plane for astronomical sun distance
     );
     // Initial position
     this.camera.position.set(0, 0, 2.8);
@@ -455,15 +460,23 @@ export class GlobeRenderer {
     this.oceanSphere.visible = false;
     this.scene.add(this.oceanSphere);
 
-    // Setup Lighting for Geometry Mode (Normalized Levels)
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+    // Create Sun Mesh (visual indicator)
+    // Scale: 109x Earth Radius
+    const sunGeometry = new THREE.SphereGeometry(109.0, 32, 32);
+    const sunMaterial = new THREE.MeshBasicMaterial({ color: 0xffff00 });
+    this.sunMesh = new THREE.Mesh(sunGeometry, sunMaterial);
+    this.sunMesh.position.copy(this.sunPosition);
+    this.scene.add(this.sunMesh);
+
+    // Setup Lighting for Geometry Mode (High Brightness Levels)
+    const ambientLight = new THREE.AmbientLight(0xffffff, 2.5);
     this.scene.add(ambientLight);
 
-    const mainLight = new THREE.DirectionalLight(0xffffff, 1.5);
-    mainLight.position.set(5, 5, 5);
+    const mainLight = new THREE.DirectionalLight(0xffffff, 3.0);
+    mainLight.position.copy(this.sunPosition); // Point from sun towards (0,0,0)
     this.scene.add(mainLight);
 
-    const fillLight = new THREE.DirectionalLight(0xffffff, 0.5);
+    const fillLight = new THREE.DirectionalLight(0xffffff, 1.0);
     fillLight.position.set(-5, 2, -5);
     this.scene.add(fillLight);
 
@@ -504,15 +517,22 @@ export class GlobeRenderer {
       if (!this.townMesh) {
         this.createTownMesh();
       }
+      if (!this.edgeMesh) {
+        this.createEdgeMesh();
+      }
       if (this.landMesh) this.landMesh.visible = true;
       if (this.townMesh) this.townMesh.visible = true;
+      if (this.edgeMesh) this.edgeMesh.visible = true;
       if (this.oceanSphere) this.oceanSphere.visible = true;
+      if (this.sunMesh) this.sunMesh.visible = true;
     } else {
       // Switch to Texture Mode
       this.sphere.visible = true;
       if (this.landMesh) this.landMesh.visible = false;
       if (this.townMesh) this.townMesh.visible = false;
+      if (this.edgeMesh) this.edgeMesh.visible = false;
       if (this.oceanSphere) this.oceanSphere.visible = false;
+      if (this.sunMesh) this.sunMesh.visible = false;
     }
   }
 
@@ -525,15 +545,41 @@ export class GlobeRenderer {
       fragmentShader: PLANET_FRAGMENT_SHADER,
       uniforms: {
         elevationScale: { value: 0.15 },
+        sunDirection: { value: this.sunPosition.clone().normalize() },
+        isLine: { value: false },
       },
       vertexColors: true,
       side: THREE.FrontSide,
       extensions: { derivatives: true }, // Required for dFdx/dFdy in fragment shader
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -1,
     });
 
     this.landMesh = new THREE.Mesh(geometry, material);
     this.landMesh.frustumCulled = false; // Important because "flat" positions aren't the real spherical ones
     this.scene.add(this.landMesh);
+  }
+
+  private createEdgeMesh(): void {
+    const geoRenderer = new GlobeGeometryRenderer(this.planetMap);
+    const geometry = geoRenderer.createEdgeGeometry();
+
+    const material = new THREE.ShaderMaterial({
+      vertexShader: PLANET_VERTEX_SHADER,
+      fragmentShader: PLANET_FRAGMENT_SHADER,
+      uniforms: {
+        elevationScale: { value: 0.15 },
+        sunDirection: { value: this.sunPosition.clone().normalize() },
+        isLine: { value: true },
+      },
+      vertexColors: true,
+      side: THREE.DoubleSide,
+    });
+
+    this.edgeMesh = new THREE.Mesh(geometry, material);
+    this.edgeMesh.frustumCulled = false;
+    this.scene.add(this.edgeMesh);
   }
 
   private createTownMesh(): void {
@@ -545,9 +591,14 @@ export class GlobeRenderer {
       fragmentShader: PLANET_FRAGMENT_SHADER,
       uniforms: {
         elevationScale: { value: 0.15 },
+        sunDirection: { value: this.sunPosition.clone().normalize() },
+        isLine: { value: false },
       },
       vertexColors: true,
       extensions: { derivatives: true },
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -1,
     });
 
     this.townMesh = new THREE.Mesh(geometry, material);

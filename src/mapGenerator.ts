@@ -443,6 +443,47 @@ export function generatePlanetMap(customConfig?: MapConfig): PlanetMap {
     }
   });
 
+  // 5.7 Water Body Pass: Group connected water cells and unify their elevations
+  const waterVisited = new Set<number>();
+  cells.forEach((startCell) => {
+    if (startCell.isLand || waterVisited.has(startCell.id)) return;
+
+    // Found a new water body (Coast or Sea)
+    const body: Cell[] = [];
+    const queue: Cell[] = [startCell];
+    waterVisited.add(startCell.id);
+
+    let hasSeaCell = false;
+
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      body.push(current);
+      if (!current.isCoast) hasSeaCell = true;
+
+      current.neighbors.forEach((nId) => {
+        const neighbor = cells[nId];
+        if (neighbor && !neighbor.isLand && !waterVisited.has(neighbor.id)) {
+          waterVisited.add(neighbor.id);
+          queue.push(neighbor);
+        }
+      });
+    }
+
+    if (hasSeaCell) {
+      // Global Ocean group: set to fixed nominal sea level
+      // 0.005 is high enough to avoid Z-fighting with the ocean sphere
+      body.forEach((c) => {
+        c.elevation = 0.005;
+      });
+    } else {
+      // Inland Lake group: set to the lowest elevation in the group
+      const minElevation = Math.min(...body.map((c) => c.elevation));
+      body.forEach((c) => {
+        c.elevation = minElevation;
+      });
+    }
+  });
+
   // 6. Topological River Generation Pass (flows uphill from coasts, branching organically)
   // Rivers flow directly between the midpoints (centroids) of adjacent cells,
   // completely bypassing edge midpoints and guaranteeing that rivers never touch or cross polygon corners!

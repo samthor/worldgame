@@ -8,6 +8,7 @@ export const PLANET_VERTEX_SHADER = `
   varying vec3 vWorldPosition;
 
   uniform float elevationScale;
+  uniform bool isLine;
 
   void main() {
     vColor = vCellColor;
@@ -18,6 +19,8 @@ export const PLANET_VERTEX_SHADER = `
 
     float phi = (90.0 - lat) * (3.14159265359 / 180.0);
     float theta = (lon + 180.0) * (3.14159265359 / 180.0);
+    
+    // Physical radius
     float r = 1.0 + el * elevationScale;
 
     vec3 sphericalPos;
@@ -41,6 +44,9 @@ export const PLANET_FRAGMENT_SHADER = `
   varying vec3 vViewPosition;
   varying vec3 vWorldPosition;
 
+  uniform vec3 sunDirection; // World-space direction to the sun
+  uniform bool isLine;
+
   // Helper to boost saturation
   vec3 saturation(vec3 rgb, float adjustment) {
     const vec3 W = vec3(0.2125, 0.7154, 0.0721);
@@ -55,13 +61,12 @@ export const PLANET_FRAGMENT_SHADER = `
     vec3 normal = normalize(cross(fdx, fdy));
 
     // 2. Cinematic Sun Lighting
-    // Fixed Sun Direction in View Space
-    vec3 lightDir = normalize(vec3(0.5, 0.8, 1.0));
-    float diff = max(dot(normal, lightDir), 0.0);
+    // Transform world-space sun direction to view-space
+    vec3 viewSunDir = normalize((viewMatrix * vec4(sunDirection, 0.0)).xyz);
+    float diff = max(dot(normal, viewSunDir), 0.0);
 
     // Apply a power curve for more dramatic 'Sun' falloff
     float sunIntensity = pow(diff, 1.2);
-
     // 3. Color & Saturation
     // Boost base saturation to match 2D mode vibrancy
     vec3 saturatedColor = saturation(vColor, 1.45);
@@ -69,14 +74,19 @@ export const PLANET_FRAGMENT_SHADER = `
     // 4. Lighting Composition
     // Low ambient for deep shadows, but with colorful bounce
     float ambient = 0.32; // Slightly higher ambient for better fill
-    float diffuse = sunIntensity * 0.85; // Reduced from 1.05
-
+    float diffuse = sunIntensity * 0.85; 
+    
     vec3 finalColor = saturatedColor * (ambient + diffuse);
+    
+    // Specular-like 'Sun Kick' on direct surfaces
+    finalColor += saturatedColor * pow(diff, 12.0) * 0.25;
 
-    // Specular-like 'Sun Kick' on direct surfaces - Tone this down
-    finalColor += saturatedColor * pow(diff, 12.0) * 0.25; // Sharper falloff and lower intensity
-
-    gl_FragColor = vec4(finalColor, 1.0);
+    if (isLine) {
+      // Return a very dark version for outlines
+      gl_FragColor = vec4(saturatedColor * 0.2, 1.0);
+    } else {
+      gl_FragColor = vec4(finalColor, 1.0);
+    }
 
   }
 `;
